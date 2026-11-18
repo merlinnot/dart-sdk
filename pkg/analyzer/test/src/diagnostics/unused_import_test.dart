@@ -85,21 +85,19 @@ Two? two;
 ''');
   }
 
-  test_library_export_onlyUsedElementIsNotReexported() async {
+  test_library_export_unusedReexportOfSibling() async {
     newFile('$testPackageLibPath/a.dart', r'''
-class A {}
-class B {}
+class Reexported {}
+class OnlyInA {}
 ''');
-    newFile('$testPackageLibPath/b.dart', r'''
-export 'a.dart' show A;
-''');
+    newFile('$testPackageLibPath/b.dart', "export 'a.dart' show Reexported;");
     await resolveTestCodeWithDiagnostics(r'''
 import 'a.dart';
 import 'b.dart';
 //     ^^^^^^^^
 // [diag.unusedImport] Unused import: 'b.dart'.
 
-B? value;
+OnlyInA? value;
 ''');
   }
 
@@ -335,6 +333,26 @@ extension E on String {
 import 'lib1.dart' as lib1;
 //     ^^^^^^^^^^^
 // [diag.unusedImport] Unused import: 'lib1.dart'.
+''');
+  }
+
+  test_library_extension_providedByTwoImports() async {
+    newFile('$testPackageLibPath/a.dart', r'''
+extension Twice on int {
+  int get twice => this * 2;
+}
+class Other {}
+''');
+    newFile('$testPackageLibPath/b.dart', "export 'a.dart';");
+    newFile('$testPackageLibPath/c.dart', "export 'a.dart' show Other;");
+    await resolveTestCodeWithDiagnostics(r'''
+import 'a.dart';
+import 'b.dart';
+import 'c.dart';
+//     ^^^^^^^^
+// [diag.unusedImport] Unused import: 'c.dart'.
+
+int value = 1.twice;
 ''');
   }
 

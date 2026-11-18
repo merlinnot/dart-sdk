@@ -217,8 +217,9 @@ class ImportsTracking {
 class ImportsTrackingOfPrefix {
   final PrefixScope scope;
 
-  /// Key: an element.
-  /// Value: the imports that provide the element.
+  /// The imports that provide each element, in import order.
+  /// Elements with the same sole import share a fixed-length list.
+  /// Lists with multiple imports belong to one element and can grow.
   final Map<Element, List<LibraryImportImpl>> _elementImports = {};
 
   /// Key: an import.
@@ -328,19 +329,20 @@ class ImportsTrackingOfPrefix {
       var importedLibrary = import.importedLibrary!;
       var elementFactory = importedLibrary.internal.elementFactory;
       var combinators = import.combinators.build();
-      // Elements provided by only this import can share the same list.
-      var singleImport = [import];
+      var sharedImports = List.filled(1, import);
       for (var entry in importedLibrary.exportEntries) {
-        if (combinators.allows(entry.name)) {
-          var element = elementFactory.elementOfReference3(entry.reference);
-          var imports = _elementImports[element];
-          if (imports == null) {
-            _elementImports[element] = singleImport;
-          } else if (imports.length == 1) {
-            _elementImports[element] = [imports.first, import];
-          } else {
-            imports.add(import);
-          }
+        if (!combinators.allows(entry.name)) {
+          continue;
+        }
+
+        var element = elementFactory.elementOfReference3(entry.reference);
+        var imports = _elementImports[element];
+        if (imports == null) {
+          _elementImports[element] = sharedImports;
+        } else if (imports.length == 1) {
+          _elementImports[element] = [imports.first, import];
+        } else {
+          imports.add(import);
         }
       }
     }
