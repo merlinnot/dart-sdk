@@ -59,6 +59,7 @@ class _Visitor(final AnalysisRule rule) extends SimpleAstVisitor<void> {
     required int contentsOffset,
     required int contentsEnd,
   }) {
+    // Only tokens with a backslash need the character-by-character escape check.
     if (!token.lexeme.contains(r'\')) return;
 
     // For multiline string we keep the list on pending quotes.
