@@ -34,8 +34,8 @@ class PackagesTest with ResourceProviderMixin {
 
   test_packageForPath() {
     var packages = _packagesWithRoots({
-      'bbb': getFolder('/home/aaa/bbb'),
       'aaa': getFolder('/home/aaa'),
+      'bbb': getFolder('/home/aaa/bbb'),
       'ccc': getFolder('/home/ccc'),
     });
 
@@ -66,6 +66,7 @@ class PackagesTest with ResourceProviderMixin {
     var root = pathContext.rootPrefix(convertPath('/a.dart'));
     var packages = _packagesWithRoots({
       'root': resourceProvider.getFolder(root),
+      'nested': getFolder('/nested'),
     });
     expect(packages.packageForPath(convertPath('/a.dart')), packages['root']);
     expect(packages.packageForPath(root), isNull);
@@ -78,6 +79,16 @@ class PackagesTest with ResourceProviderMixin {
       packages.packageForPath(convertPath('/shared/a.dart')),
       packages['first'],
     );
+  }
+
+  void test_packageForPath_singlePackage() {
+    var packages = _packagesWithRoots({'aaa': getFolder('/aaa')});
+    expect(
+      packages.packageForPath(convertPath('/aaa/lib/a.dart')),
+      packages['aaa'],
+    );
+    expect(packages.packageForPath(convertPath('/aaa')), isNull);
+    expect(packages.packageForPath(convertPath('/aaa2/a.dart')), isNull);
   }
 
   void test_packageForPath_windows() {

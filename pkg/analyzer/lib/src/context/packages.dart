@@ -87,6 +87,7 @@ class Package {
   });
 }
 
+/// A snapshot of the packages configured for one file system.
 class Packages {
   static final empty = Packages({});
 
@@ -101,9 +102,18 @@ class Packages {
   /// Return the [Package] with the given [name], or `null`.
   Package? operator [](String name) => _byName[name];
 
-  /// Returns the innermost package containing the absolute, normalized [path].
+  /// Returns the innermost package containing [path], or `null` if none.
+  ///
+  /// The path must be absolute and normalized. A root does not contain itself.
   Package? packageForPath(String path) {
-    if (_byName.isEmpty) return null;
+    switch (_byName.length) {
+      case 0:
+        return null;
+      case 1:
+        var package = packages.first;
+        return package.rootFolder.contains(path) ? package : null;
+    }
+
     while (true) {
       var parent = _pathContext.dirname(path);
       if (parent == path) return null;
