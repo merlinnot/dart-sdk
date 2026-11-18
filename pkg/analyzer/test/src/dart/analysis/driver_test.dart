@@ -3094,7 +3094,6 @@ class B extends A {}
 [operation] analyzeFile
   file: /home/test/lib/b.dart
   library: /home/test/lib/b.dart
-[operation] reuseLinkedBundle SDK
 [stream]
   ResolvedUnitResult #2
     path: /home/test/lib/b.dart
@@ -5729,6 +5728,197 @@ class A {}
 ''');
   }
 
+  test_removeFile_deleteAndRestore() async {
+    var provider = newFile(
+      '$testPackageLibPath/provider.dart',
+      'class Value {}',
+    );
+    var exporter = newFile(
+      '$testPackageLibPath/exporter.dart',
+      "export 'provider.dart';",
+    );
+    var importer = newFile(
+      '$testPackageLibPath/importer.dart',
+      "import 'exporter.dart'; Value? value;",
+    );
+    var unrelated = newFile('$testPackageLibPath/unrelated.dart', '');
+    var driver = driverFor(provider);
+    var collector = DriverEventCollector(driver);
+    for (var file in [provider, exporter, importer, unrelated]) {
+      driver.addFile2(file);
+    }
+    await collector.nextStatusIdle();
+    collector.take();
+    var unrelatedState = driver.fsState.getExisting(unrelated)!;
+
+    // Both notifications can arrive before the driver gets to the edit.
+    driver.changeFile2(provider);
+    deleteFile(provider.path);
+    driver.removeFile2(provider);
+    await collector.nextStatusIdle();
+    var results = collector.takeDiagnosticResults();
+    expect(
+      results.map((result) => result.path),
+      unorderedEquals([exporter.path, importer.path]),
+    );
+    expect(results.every((result) => result.diagnostics.isNotEmpty), isTrue);
+    expect(driver.fsState.getExisting(unrelated), same(unrelatedState));
+
+    newFile(provider.path, 'class Value {}');
+    driver.addFile2(provider);
+    await collector.nextStatusIdle();
+    var restored = collector.takeDiagnosticResults();
+    for (var file in [exporter, importer]) {
+      expect(
+        restored.singleWhere((result) => result.path == file.path).diagnostics,
+        isEmpty,
+      );
+    }
+  }
+
+  test_removeFile_deleteContainingLibrary() async {
+    var library = newFile(
+      '$testPackageLibPath/library.dart',
+      "library example; part 'named.dart'; part 'uri.dart'; class Value {}",
+    );
+    var namedPart = newFile(
+      '$testPackageLibPath/named.dart',
+      'part of example; Value? a;',
+    );
+    var uriPart = newFile(
+      '$testPackageLibPath/uri.dart',
+      "part of 'library.dart'; Value? b;",
+    );
+    var driver = driverFor(library);
+    var collector = DriverEventCollector(driver);
+    for (var file in [library, namedPart, uriPart]) {
+      driver.addFile2(file);
+    }
+    await collector.nextStatusIdle();
+    collector.take();
+
+    deleteFile(library.path);
+    driver.removeFile2(library);
+    await collector.nextStatusIdle();
+    var results = collector.takeDiagnosticResults();
+    for (var part in [namedPart, uriPart]) {
+      var result = results.singleWhere((result) => result.path == part.path);
+      expect(result.diagnostics, isNotEmpty);
+    }
+  }
+
+  test_removeFile_deleteLastImporter() async {
+    var exporter = newFile(
+      '$testPackageLibPath/exporter.dart',
+      "export 'dependency.dart';",
+    );
+    var dependency = newFile('$testPackageLibPath/dependency.dart', '');
+    var unrelated = newFile('$testPackageLibPath/unrelated.dart', '');
+    var driver = driverFor(exporter);
+    var collector = DriverEventCollector(driver);
+    driver.addFile2(exporter);
+    driver.addFile2(unrelated);
+    await collector.nextStatusIdle();
+    expect(driver.knownFiles.resources, contains(dependency));
+
+    deleteFile(exporter.path);
+    driver.removeFile2(exporter);
+    await collector.nextStatusIdle();
+    expect(driver.knownFiles.resources, isNot(contains(exporter)));
+    expect(driver.knownFiles.resources, isNot(contains(dependency)));
+    expect(driver.knownFiles.resources, contains(unrelated));
+  }
+
+  test_removeFile_deleteLastImporterOfOrphanPart() async {
+    var importer = newFile(
+      '$testPackageLibPath/importer.dart',
+      "import 'orphan.dart';",
+    );
+    var orphan = newFile('$testPackageLibPath/orphan.dart', 'part of missing;');
+    var keep = newFile('$testPackageLibPath/keep.dart', '');
+    var driver = driverFor(keep);
+    var collector = DriverEventCollector(driver);
+    driver.addFile2(importer);
+    driver.addFile2(keep);
+    await collector.nextStatusIdle();
+    expect(driver.knownFiles.resources, contains(orphan));
+
+    var sibling = newFile(
+      '$testPackageLibPath/sibling.dart',
+      'class Sibling {}',
+    );
+    deleteFile(importer.path);
+    driver.removeFile2(importer);
+    await collector.nextStatusIdle();
+    expect(driver.fsState.getFilesWithTopLevelDeclarations('Sibling'), isEmpty);
+    expect(driver.knownFiles.resources, isNot(contains(sibling)));
+  }
+
+  test_removeFile_deletePart() async {
+    var library = newFile(
+      '$testPackageLibPath/library.dart',
+      "part 'part.dart';",
+    );
+    var part = newFile(
+      '$testPackageLibPath/part.dart',
+      "part of 'library.dart'; class P {}",
+    );
+    var importer = newFile(
+      '$testPackageLibPath/importer.dart',
+      "import 'library.dart'; P? value;",
+    );
+    var driver = driverFor(library);
+    var collector = DriverEventCollector(driver);
+    for (var file in [library, part, importer]) {
+      driver.addFile2(file);
+    }
+    await collector.nextStatusIdle();
+    collector.take();
+
+    deleteFile(part.path);
+    driver.removeFile2(part);
+    await collector.nextStatusIdle();
+    var results = collector.takeDiagnosticResults();
+    for (var file in [library, importer]) {
+      expect(
+        results.singleWhere((result) => result.path == file.path).diagnostics,
+        isNotEmpty,
+      );
+    }
+  }
+
+  test_removeFile_evictIndexes() async {
+    var removed = newFile(
+      '$testPackageLibPath/removed.dart',
+      'class A extends Shared {} class B extends Unique {}',
+    );
+    var keep = newFile(
+      '$testPackageLibPath/keep.dart',
+      'class C extends Shared {}',
+    );
+    var driver = driverFor(keep);
+    var collector = DriverEventCollector(driver);
+    driver.addFile2(removed);
+    driver.addFile2(keep);
+    await collector.nextStatusIdle();
+    var fs = driver.fsState;
+    expect(fs.getFilesSubtypingName('Unique')!.single.resource, removed);
+    expect(fs.test.cachedUriPaths, contains(removed.path));
+
+    // A removal can also arrive before the file has been analyzed.
+    var pending = newFile('$testPackageLibPath/pending.dart', '');
+    driver.addFile2(pending);
+    for (var file in [removed, pending]) {
+      deleteFile(file.path);
+      driver.removeFile2(file);
+    }
+    await collector.nextStatusIdle();
+    expect(fs.test.cachedUriPaths, isNot(contains(removed.path)));
+    expect(fs.test.cachedUriPaths, isNot(contains(pending.path)));
+    expect(fs.getFilesSubtypingName('Unique'), isNull);
+    expect(fs.getFilesSubtypingName('Shared')!.single.resource, keep);
+  }
+
   test_removeFile_invalidate_importers() async {
     var a = newFile('$testPackageLibPath/a.dart', r'''
 class A {}
@@ -5772,7 +5962,6 @@ final a = new A();
     driver.removeFile2(a);
     await assertEventsText(collector, r'''
 [status] working
-[operation] reuseLinkedBundle SDK
 [operation] analyzeFile
   file: /home/test/lib/b.dart
   library: /home/test/lib/b.dart
@@ -6361,6 +6550,16 @@ class DriverEventCollector {
     var result = _events.toList();
     _events.clear();
     return result;
+  }
+
+  List<AnalysisResultWithDiagnostics> takeDiagnosticResults() {
+    return [
+      for (var event in take())
+        if (event case ResultStreamEvent(
+          object: AnalysisResultWithDiagnostics result,
+        ))
+          result,
+    ];
   }
 
   void _addPending<T>(

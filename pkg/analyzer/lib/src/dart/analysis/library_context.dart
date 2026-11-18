@@ -182,13 +182,16 @@ class LibraryContext {
 
     elementFactory.removeLibraries(removed.map((e) => e.uri).toSet());
 
-    var removedCycles = removed
-        .map((file) => file.kind.library?.internal_libraryCycle)
-        .nonNulls
-        .where(loadedBundles.contains)
-        .toSet();
-    loadedBundles.removeAll(removedCycles);
-    removedKeys.addAll(removedCycles.map((cycle) => cycle.linkedKey));
+    // The removed set includes referrers, so it includes the containing
+    // library of each affected part. Looking up a part's owner here could
+    // discover more files while the caller is discarding them.
+    loadedBundles.removeWhere((cycle) {
+      if (cycle.libraries.any((library) => removed.contains(library.file))) {
+        removedKeys.add(cycle.linkedKey);
+        return true;
+      }
+      return false;
+    });
   }
 
   /// Unloads all loaded bundles.

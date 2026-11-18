@@ -57,8 +57,9 @@ import 'package:pub_semver/pub_semver.dart';
 /// kinds.
 sealed class DirectiveState {
   final FileKind container;
+  final DirectiveUris uris;
 
-  new({required this.container});
+  new({required this.container, required this.uris});
 
   void dispose() {}
 }
@@ -80,6 +81,13 @@ class DirectiveUris {
     required this.configurations,
     required this.selected,
   });
+
+  Iterable<FileState> get referencedFiles sync* {
+    if (primary case DirectiveUriWithFile(:var file)) yield file;
+    for (var uri in configurations) {
+      if (uri case DirectiveUriWithFile(:var file)) yield file;
+    }
+  }
 }
 
 /// [DirectiveUriWithUri] with URI that resolves to a [FileState].
@@ -177,6 +185,23 @@ abstract class FileKind {
   /// file itself as a library.
   LibraryFileKind get asLibrary {
     return LibraryFileKind(file: file, name: null, recoveredFrom: this);
+  }
+
+  /// Already resolved file references, including unselected conditional URIs
+  /// and the container named by a part. Reading these must not discover files.
+  Iterable<FileState> get _cachedReferences sync* {
+    if (this case PartOfUriKnownFileKind(:var uriFile)) yield uriFile;
+    if (this case PartOfNameFileKind(:var libraries)) {
+      yield* libraries.map((library) => library.file);
+    }
+    for (var directive in [
+      ...?_libraryImports,
+      ...?_libraryExports,
+      ...?_partIncludes,
+      ...?_docLibraryImports,
+    ]) {
+      yield* directive.uris.referencedFiles;
+    }
   }
 
   /// The import states of each `@docImport` on the library directive or
@@ -893,7 +918,12 @@ class FileState {
     if (_driverUnlinkedUnit != null) {
       for (var name in _driverUnlinkedUnit!.subtypedNames) {
         var files = _fsState._subtypedNameToFiles[name];
-        files?.remove(this);
+        if (files != null) {
+          files.remove(this);
+          if (files.isEmpty) {
+            _fsState._subtypedNameToFiles.remove(name);
+          }
+        }
       }
     }
   }
@@ -1350,6 +1380,7 @@ class FileSystemState {
   /// was changed. Specifically this means that we evict this file and every
   /// file that referenced it.
   void changeFile(String path) {
+    _hasUriForPath.remove(path);
     var file = _pathToFile.remove(path);
     if (file == null) {
       return;
@@ -1375,10 +1406,17 @@ class FileSystemState {
 
   /// Collected files that transitively reference a file with the [path].
   /// These files are potentially affected by the change.
-  void collectAffected(String path, Set<FileState> affected) {
+  void collectAffected(
+    String path,
+    Set<FileState> affected, {
+    Map<FileState, Set<FileState>>? additionalReferrers,
+  }) {
     collectAffected(FileState file) {
       if (affected.add(file)) {
         for (var other in file.referencingFiles) {
+          collectAffected(other);
+        }
+        for (var other in additionalReferrers?[file] ?? const <FileState>{}) {
           collectAffected(other);
         }
       }
@@ -1577,9 +1615,50 @@ class FileSystemState {
     return flag;
   }
 
+  /// Refresh a deleted file that other files may still reference.
+  void refreshDeletedFile(String path) {
+    _hasUriForPath.remove(path);
+    _pathToFile[path]?.refresh();
+  }
+
   /// Remove the file with the given [path].
   void removeFile(String path) {
     _clearFiles();
+  }
+
+  /// Reverse lookup for all materialized directives. Ordinary change tracking
+  /// only follows selected imports, exports, and part inclusions. Deletion can
+  /// also affect URI diagnostics in other directives.
+  Map<FileState, Set<FileState>> computeDeletionReferrers() {
+    return _reverseReferences((file) => file.kind._cachedReferences);
+  }
+
+  /// Discards cached files no longer reachable from an explicit analysis root.
+  /// Only walk materialized references, including unresolved imports and
+  /// unselected conditional URIs, so pruning does not discover new files.
+  void discardUnreachableFiles(
+    Set<String> roots,
+    void Function(Set<FileState>) beforeRemoving,
+  ) {
+    // Recovered library kinds can also own references (e.g. an orphan part
+    // analyzed as a library). Those are recorded on the referenced file.
+    var targetsByReferrer = _reverseReferences((file) => file.referencingFiles);
+    var retained = <FileState>{};
+    var pending = [for (var path in roots) ?_pathToFile[path]];
+    while (pending.isNotEmpty) {
+      var file = pending.removeLast();
+      if (retained.add(file)) {
+        pending.addAll(file.kind._cachedReferences);
+        pending.addAll(targetsByReferrer[file] ?? const <FileState>{});
+      }
+    }
+
+    var unused = knownFiles.difference(retained);
+    beforeRemoving(unused);
+    for (var file in unused) {
+      knownFilePaths.remove(file.path);
+      changeFile(file.path);
+    }
   }
 
   /// Removes [FileState]s not used to analyze the given [paths].
@@ -1623,6 +1702,18 @@ class FileSystemState {
       units.clear();
       _unlinkedUnitsForLinking = null;
     }
+  }
+
+  Map<FileState, Set<FileState>> _reverseReferences(
+    Iterable<FileState> Function(FileState) referencesOf,
+  ) {
+    var result = <FileState, Set<FileState>>{};
+    for (var file in knownFiles) {
+      for (var reference in referencesOf(file)) {
+        (result[reference] ??= {}).add(file);
+      }
+    }
+    return result;
   }
 
   /// Clear all [FileState] data - all maps from path or URI, etc.
@@ -1689,6 +1780,8 @@ class FileSystemStateTestView {
   final FileSystemState state;
 
   new(this.state);
+
+  Iterable<String> get cachedUriPaths => state._hasUriForPath.keys;
 
   Map<Uri, FileState> get uriToFile => state._uriToFile;
 }
@@ -1770,13 +1863,12 @@ class FileUriProperties {
 final class LibraryExportState<U extends DirectiveUri> extends DirectiveState {
   final UnlinkedLibraryExportDirective unlinked;
   final U selectedUri;
-  final DirectiveUris uris;
 
   new({
     required super.container,
     required this.unlinked,
     required this.selectedUri,
-    required this.uris,
+    required super.uris,
   });
 
   /// If [exportedSource] corresponds to a library, returns it.
@@ -2013,13 +2105,12 @@ class LibraryFileKind extends LibraryOrAugmentationFileKind {
 final class LibraryImportState<U extends DirectiveUri> extends DirectiveState {
   final UnlinkedLibraryImportDirective unlinked;
   final U selectedUri;
-  final DirectiveUris uris;
 
   new({
     required super.container,
     required this.unlinked,
     required this.selectedUri,
-    required this.uris,
+    required super.uris,
   });
 
   /// If [importedSource] corresponds to a library, returns it.
@@ -2138,13 +2229,12 @@ sealed class PartFileKind extends FileKind {
 final class PartIncludeState<U extends DirectiveUri> extends DirectiveState {
   final UnlinkedPartDirective unlinked;
   final U selectedUri;
-  final DirectiveUris uris;
 
   new({
     required super.container,
     required this.unlinked,
     required this.selectedUri,
-    required this.uris,
+    required super.uris,
   });
 }
 

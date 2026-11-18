@@ -64,6 +64,7 @@ import 'package:analyzer/src/utilities/extensions/collection.dart';
 import 'package:analyzer/src/utilities/extensions/object.dart';
 import 'package:analyzer/src/utilities/uri_cache.dart';
 import 'package:analyzer/src/workspace/pub.dart';
+import 'package:analyzer/src/workspace/simple.dart';
 import 'package:collection/collection.dart';
 import 'package:meta/meta.dart';
 import 'package:pub_semver/pub_semver.dart';
@@ -1581,35 +1582,62 @@ class AnalysisDriver {
   }
 
   void _applyPendingFileChanges() {
-    var accumulatedAffected = <String>{};
-    for (var fileChange in _pendingFileChanges) {
-      var path = fileChange.path;
-      _removePotentiallyAffectedLibraries(accumulatedAffected, path);
-      switch (fileChange.kind) {
+    var affectedPaths = <String>{};
+    Map<FileState, Set<FileState>>? deletionReferrers;
+
+    for (var change in _pendingFileChanges) {
+      var path = change.path;
+      var incrementalDeletion = _canHandleDeletionIncrementally(change);
+      if (incrementalDeletion) {
+        deletionReferrers ??= _fsState.computeDeletionReferrers();
+      }
+      var affected = _invalidateLibraries(
+        path,
+        additionalReferrers: incrementalDeletion ? deletionReferrers : null,
+      );
+      affectedPaths.addAll(affected.map((file) => file.path));
+
+      switch (change.kind) {
         case FileChangeKind.add:
           _fileTracker.addFile(path);
         case FileChangeKind.change:
           _fileTracker.changeFile(path);
         case FileChangeKind.remove:
-          _fileTracker.removeFile(path);
+          if (incrementalDeletion) {
+            _fileTracker.removeDeletedFile(path, affected);
+          } else {
+            _fileTracker.removeFile(path);
+            clearLibraryContext();
+            deletionReferrers = null;
+          }
           _resetAvailableFilesDiscovery();
-          // TODO(scheglov): We have to do this because we discard files.
-          // But this is not right, we need to handle removing better.
-          clearLibraryContext();
       }
     }
     _pendingFileChanges.clear();
 
     // Read files, so that synchronous methods also see new content.
     while (_fileTracker.verifyChangedFilesIfNeeded()) {}
+    if (deletionReferrers != null) {
+      _fsState.discardUnreachableFiles(_fileTracker.addedFiles, (unused) {
+        _libraryContext?.remove(unused, <String>{});
+      });
+    }
 
     if (_pendingFileChangesCompleters.isNotEmpty) {
       var completers = _pendingFileChangesCompleters.toList();
       _pendingFileChangesCompleters.clear();
       for (var completer in completers) {
-        completer.complete(accumulatedAffected.toList());
+        completer.complete(affectedPaths.toList());
       }
     }
+  }
+
+  bool _canHandleDeletionIncrementally(FileChange change) {
+    // Generated workspaces can resolve the same URI to a new path after deletion.
+    // Removing a file that still exists only unregisters an analysis root.
+    return change.kind == FileChangeKind.remove &&
+        analysisContext?.contextRoot.workspace is SimpleWorkspace &&
+        !_resourceProvider.getFile(change.path).exists;
   }
 
   /// Completes pending requests if a required SDK library is missing.
@@ -2275,12 +2303,16 @@ class AnalysisDriver {
     }
   }
 
-  void _removePotentiallyAffectedLibraries(
-    Set<String> accumulatedAffected,
-    String path,
-  ) {
+  Set<FileState> _invalidateLibraries(
+    String path, {
+    Map<FileState, Set<FileState>>? additionalReferrers,
+  }) {
     var affected = <FileState>{};
-    _fsState.collectAffected(path, affected);
+    _fsState.collectAffected(
+      path,
+      affected,
+      additionalReferrers: additionalReferrers,
+    );
 
     var removedKeys = <String>{};
     _libraryContext?.remove(affected, removedKeys);
@@ -2291,17 +2323,18 @@ class AnalysisDriver {
       if (kind is LibraryFileKind) {
         kind.disposeLibraryCycle();
       }
-      accumulatedAffected.add(file.path);
     }
 
-    if (_fsState.getExistingFromPath(path) case var changedFile?) {
-      var changedLibrary = changedFile.kind.library;
-      changedLibrary?.invalidateDiagnosticsBundleKey();
+    // Deletion already invalidated every known owner in the affected set.
+    if (additionalReferrers == null) {
+      var changedFile = _fsState.getExistingFromPath(path);
+      changedFile?.kind.library?.invalidateDiagnosticsBundleKey();
     }
 
     _libraryContext?.elementFactory.replaceAnalysisSession(
       AnalysisSessionImpl(this),
     );
+    return affected;
   }
 
   void _reportException(

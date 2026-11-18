@@ -134,16 +134,19 @@ class FileTracker {
         _pendingFiles.contains(path);
   }
 
-  /// Removes the given [path] from the set of "added files".
+  /// Removes a deleted file and schedules the registered units of affected libraries.
+  void removeDeletedFile(String path, Set<FileState> affected) {
+    _stopTracking(path);
+    // Deletion referrers already include parts that name an affected library.
+    for (var file in affected) {
+      if (addedFiles.contains(file.path)) _pendingFiles.add(file.path);
+    }
+    _fsState.refreshDeletedFile(path);
+  }
+
+  /// Removes an analysis root and rebuilds the remaining roots.
   void removeFile(String path) {
-    _fileContentStrategy.markFileForReading(path);
-    addedFiles.remove(path);
-    _pendingChangedFiles.remove(path);
-    _pendingImportFiles.remove(path);
-    _pendingErrorFiles.remove(path);
-    _pendingFiles.remove(path);
-    // TODO(paulberry): removing the path from [fsState] and re-analyzing all
-    // files seems extreme.
+    _stopTracking(path);
     _fsState.removeFile(path);
     _pendingFiles.addAll(addedFiles);
   }
@@ -231,6 +234,13 @@ class FileTracker {
       return true;
     }
     return false;
+  }
+
+  void _stopTracking(String path) {
+    _fileContentStrategy.markFileForReading(path);
+    addedFiles.remove(path);
+    _changedFiles.remove(path);
+    fileWasAnalyzed(path);
   }
 }
 
