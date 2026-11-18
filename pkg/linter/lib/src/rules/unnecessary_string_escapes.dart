@@ -59,6 +59,8 @@ class _Visitor(final AnalysisRule rule) extends SimpleAstVisitor<void> {
     required int contentsOffset,
     required int contentsEnd,
   }) {
+    if (!token.lexeme.contains(r'\')) return;
+
     // For multiline string we keep the list on pending quotes.
     // Starting from 3 consecutive quotes, we allow escaping.
     // index -> escaped
