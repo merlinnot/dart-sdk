@@ -5,6 +5,7 @@
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/util/uri.dart';
 import 'package:package_config/package_config_types.dart';
+import 'package:path/path.dart' as path;
 import 'package:pub_semver/pub_semver.dart';
 
 /// Find [Packages] starting from the given [start] resource.
@@ -89,28 +90,35 @@ class Package {
 class Packages {
   static final empty = Packages({});
 
-  final Map<String, Package> _map;
+  final Map<String, Package> _byName;
+  late final _pathContext = packages.first.rootFolder.provider.pathContext;
+  late final _byRoot = _indexByRoot();
 
-  new(Map<String, Package> map) : _map = map;
+  new(Map<String, Package> byName) : _byName = Map.unmodifiable(byName);
 
-  Iterable<Package> get packages => _map.values;
+  Iterable<Package> get packages => _byName.values;
 
   /// Return the [Package] with the given [name], or `null`.
-  Package? operator [](String name) => _map[name];
+  Package? operator [](String name) => _byName[name];
 
-  /// Return the inner-most [Package] that contains  the [path], `null` if none.
+  /// Returns the innermost package containing the absolute, normalized [path].
   Package? packageForPath(String path) {
-    Package? result;
-    int resultPathLength = 1 << 20;
-    for (var package in packages) {
-      if (package.rootFolder.contains(path)) {
-        var packagePathLength = package.rootFolder.path.length;
-        if (result == null || resultPathLength < packagePathLength) {
-          result = package;
-          resultPathLength = packagePathLength;
-        }
-      }
+    if (_byName.isEmpty) return null;
+    while (true) {
+      var parent = _pathContext.dirname(path);
+      if (parent == path) return null;
+      var package = _byRoot[parent];
+      if (package != null) return package;
+      path = parent;
     }
-    return result;
+  }
+
+  path.PathMap<Package> _indexByRoot() {
+    var byRoot = path.PathMap<Package>(context: _pathContext);
+    for (var package in packages) {
+      // When two names share a root, keep the first package in config order.
+      byRoot.putIfAbsent(package.rootFolder.path, () => package);
+    }
+    return byRoot;
   }
 }

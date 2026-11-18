@@ -2,8 +2,11 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'package:analyzer/file_system/file_system.dart';
+import 'package:analyzer/file_system/memory_file_system.dart';
 import 'package:analyzer/src/context/packages.dart';
 import 'package:analyzer_testing/resource_provider_mixin.dart';
+import 'package:path/path.dart' as path;
 import 'package:pub_semver/pub_semver.dart';
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
@@ -30,25 +33,10 @@ class PackagesTest with ResourceProviderMixin {
   }
 
   test_packageForPath() {
-    var packages = Packages({
-      'aaa': Package(
-        name: 'aaa',
-        rootFolder: getFolder('/home/aaa'),
-        libFolder: getFolder('/home/aaa/lib'),
-        languageVersion: Version.parse('2.7.0'),
-      ),
-      'bbb': Package(
-        name: 'bbb',
-        rootFolder: getFolder('/home/aaa/bbb'),
-        libFolder: getFolder('/home/aaa/bbb/lib'),
-        languageVersion: Version.parse('2.7.0'),
-      ),
-      'ccc': Package(
-        name: 'ccc',
-        rootFolder: getFolder('/home/ccc'),
-        libFolder: getFolder('/home/ccc/lib'),
-        languageVersion: Version.parse('2.7.0'),
-      ),
+    var packages = _packagesWithRoots({
+      'bbb': getFolder('/home/aaa/bbb'),
+      'aaa': getFolder('/home/aaa'),
+      'ccc': getFolder('/home/ccc'),
     });
 
     void check(String posixPath, String? expectedPackageName) {
@@ -61,6 +49,50 @@ class PackagesTest with ResourceProviderMixin {
     check('/home/aaa/bbb/lib/b.dart', 'bbb');
     check('/home/ccc/lib/c.dart', 'ccc');
     check('/home/ddd/lib/d.dart', null);
+    check('/home/aaa/bbb', 'aaa');
+    check('/home/aaa', null);
+    check('/home/aaa2/file.dart', null);
+    check(
+      '/home/AAA/file.dart',
+      pathContext.style == path.Style.windows ? 'aaa' : null,
+    );
+  }
+
+  void test_packageForPath_empty() {
+    expect(Packages.empty.packageForPath(convertPath('/a.dart')), isNull);
+  }
+
+  void test_packageForPath_fileSystemRoot() {
+    var root = pathContext.rootPrefix(convertPath('/a.dart'));
+    var packages = _packagesWithRoots({
+      'root': resourceProvider.getFolder(root),
+    });
+    expect(packages.packageForPath(convertPath('/a.dart')), packages['root']);
+    expect(packages.packageForPath(root), isNull);
+  }
+
+  void test_packageForPath_sharedRoot() {
+    var root = getFolder('/shared');
+    var packages = _packagesWithRoots({'first': root, 'second': root});
+    expect(
+      packages.packageForPath(convertPath('/shared/a.dart')),
+      packages['first'],
+    );
+  }
+
+  void test_packageForPath_windows() {
+    var provider = MemoryResourceProvider(context: path.windows);
+    var packages = _packagesWithRoots({
+      'local': provider.getFolder(r'C:\Code\App'),
+      'share': provider.getFolder(r'\\server\share\pkg'),
+    });
+    expect(packages.packageForPath(r'c:\code\app\a.dart'), packages['local']);
+    expect(packages.packageForPath(r'D:\Code\App\a.dart'), isNull);
+    expect(
+      packages.packageForPath(r'\\SERVER\Share\PKG\a.dart'),
+      packages['share'],
+    );
+    expect(packages.packageForPath(r'\\server\other\pkg\a.dart'), isNull);
   }
 
   test_parsePackageConfigJsonFile() {
@@ -147,5 +179,17 @@ class PackagesTest with ResourceProviderMixin {
     expect(package.name, name);
     expect(package.libFolder.path, convertPath(expectedLibPath));
     expect(package.languageVersion, expectedVersion);
+  }
+
+  Packages _packagesWithRoots(Map<String, Folder> roots) {
+    return Packages({
+      for (var MapEntry(key: name, value: root) in roots.entries)
+        name: Package(
+          name: name,
+          rootFolder: root,
+          libFolder: root.getFolder('lib'),
+          languageVersion: null,
+        ),
+    });
   }
 }
