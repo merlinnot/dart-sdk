@@ -1794,6 +1794,16 @@ class AnalysisDriver {
     }
   }
 
+  ResolvedLibraryResultImpl? _getCachedResolvedLibrary(String path) {
+    var cached = _resolvedLibraryCache[path];
+    if (cached != null &&
+        !hasPendingFileChanges &&
+        cached.session == currentSession) {
+      return cached;
+    }
+    return null;
+  }
+
   /// Return [Diagnostic]s for the given [serialized] diagnostics.
   List<Diagnostic> _getDiagnosticsFromSerialized(
     FileState file,
@@ -2040,16 +2050,6 @@ class AnalysisDriver {
 
     var key = '${keyBuilder.toHex()}.resolved2';
     return library.diagnosticsBundleKey = key;
-  }
-
-  ResolvedLibraryResultImpl? _getCachedResolvedLibrary(String path) {
-    var cached = _resolvedLibraryCache[path];
-    if (cached != null &&
-        !hasPendingFileChanges &&
-        cached.session == currentSession) {
-      return cached;
-    }
-    return null;
   }
 
   /// Completes the [getResolvedLibrary] request.
