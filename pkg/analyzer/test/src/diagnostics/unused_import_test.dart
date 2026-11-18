@@ -85,6 +85,39 @@ Two? two;
 ''');
   }
 
+  test_library_export_onlyUsedElementIsNotReexported() async {
+    newFile('$testPackageLibPath/a.dart', r'''
+class A {}
+class B {}
+''');
+    newFile('$testPackageLibPath/b.dart', r'''
+export 'a.dart' show A;
+''');
+    await resolveTestCodeWithDiagnostics(r'''
+import 'a.dart';
+import 'b.dart';
+//     ^^^^^^^^
+// [diag.unusedImport] Unused import: 'b.dart'.
+
+B? value;
+''');
+  }
+
+  test_library_export_usedElementProvidedByThreeImports() async {
+    newFile('$testPackageLibPath/a.dart', r'''
+class A {}
+''');
+    newFile('$testPackageLibPath/b.dart', "export 'a.dart';");
+    newFile('$testPackageLibPath/c.dart', "export 'a.dart';");
+    await resolveTestCodeWithDiagnostics(r'''
+import 'a.dart' as p;
+import 'b.dart' as p;
+import 'c.dart' as p;
+
+p.A? value;
+''');
+  }
+
   test_library_extension_instance_call() async {
     newFile('$testPackageLibPath/lib1.dart', r'''
 extension E on int {

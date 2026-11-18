@@ -328,10 +328,19 @@ class ImportsTrackingOfPrefix {
       var importedLibrary = import.importedLibrary!;
       var elementFactory = importedLibrary.internal.elementFactory;
       var combinators = import.combinators.build();
+      // Elements provided by only this import can share the same list.
+      var singleImport = [import];
       for (var entry in importedLibrary.exportEntries) {
         if (combinators.allows(entry.name)) {
           var element = elementFactory.elementOfReference3(entry.reference);
-          (_elementImports[element] ??= []).add(import);
+          var imports = _elementImports[element];
+          if (imports == null) {
+            _elementImports[element] = singleImport;
+          } else if (imports.length == 1) {
+            _elementImports[element] = [imports.first, import];
+          } else {
+            imports.add(import);
+          }
         }
       }
     }
