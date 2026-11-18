@@ -5729,13 +5729,22 @@ class A {}
   }
 
   test_removeFile_deleteAndRestore() async {
-    var a = newFile('$testPackageLibPath/a.dart', 'class A {}');
-    var b = newFile('$testPackageLibPath/b.dart', "export 'a.dart';");
-    var c = newFile('$testPackageLibPath/c.dart', "import 'b.dart'; A? value;");
+    var provider = newFile(
+      '$testPackageLibPath/provider.dart',
+      'class Value {}',
+    );
+    var exporter = newFile(
+      '$testPackageLibPath/exporter.dart',
+      "export 'provider.dart';",
+    );
+    var importer = newFile(
+      '$testPackageLibPath/importer.dart',
+      "import 'exporter.dart'; Value? value;",
+    );
     var unrelated = newFile('$testPackageLibPath/unrelated.dart', '');
-    var driver = driverFor(a);
+    var driver = driverFor(provider);
     var collector = DriverEventCollector(driver);
-    for (var file in [a, b, c, unrelated]) {
+    for (var file in [provider, exporter, importer, unrelated]) {
       driver.addFile2(file);
     }
     await collector.nextStatusIdle();
@@ -5743,30 +5752,23 @@ class A {}
     var unrelatedState = driver.fsState.getExisting(unrelated)!;
 
     // Both notifications can arrive before the driver gets to the edit.
-    driver.changeFile2(a);
-    deleteFile(a.path);
-    driver.removeFile2(a);
+    driver.changeFile2(provider);
+    deleteFile(provider.path);
+    driver.removeFile2(provider);
     await collector.nextStatusIdle();
-    var events = collector.take().whereType<ResultStreamEvent>();
-    var results = events
-        .map((event) => event.object)
-        .whereType<AnalysisResultWithDiagnostics>();
+    var results = collector.takeDiagnosticResults();
     expect(
       results.map((result) => result.path),
-      unorderedEquals([b.path, c.path]),
+      unorderedEquals([exporter.path, importer.path]),
     );
     expect(results.every((result) => result.diagnostics.isNotEmpty), isTrue);
     expect(driver.fsState.getExisting(unrelated), same(unrelatedState));
 
-    newFile(a.path, 'class A {}');
-    driver.addFile2(a);
+    newFile(provider.path, 'class Value {}');
+    driver.addFile2(provider);
     await collector.nextStatusIdle();
-    var restored = collector
-        .take()
-        .whereType<ResultStreamEvent>()
-        .map((event) => event.object)
-        .whereType<AnalysisResultWithDiagnostics>();
-    for (var file in [b, c]) {
+    var restored = collector.takeDiagnosticResults();
+    for (var file in [exporter, importer]) {
       expect(
         restored.singleWhere((result) => result.path == file.path).diagnostics,
         isEmpty,
@@ -5775,34 +5777,43 @@ class A {}
   }
 
   test_removeFile_deleteLastImporter() async {
-    var a = newFile('$testPackageLibPath/a.dart', "export 'b.dart';");
-    var b = newFile('$testPackageLibPath/b.dart', '');
-    var other = newFile('$testPackageLibPath/other.dart', '');
-    var driver = driverFor(a);
+    var exporter = newFile(
+      '$testPackageLibPath/exporter.dart',
+      "export 'dependency.dart';",
+    );
+    var dependency = newFile('$testPackageLibPath/dependency.dart', '');
+    var unrelated = newFile('$testPackageLibPath/unrelated.dart', '');
+    var driver = driverFor(exporter);
     var collector = DriverEventCollector(driver);
-    driver.addFile2(a);
-    driver.addFile2(other);
+    driver.addFile2(exporter);
+    driver.addFile2(unrelated);
     await collector.nextStatusIdle();
-    expect(driver.knownFiles.resources, contains(b));
+    expect(driver.knownFiles.resources, contains(dependency));
 
-    deleteFile(a.path);
-    driver.removeFile2(a);
+    deleteFile(exporter.path);
+    driver.removeFile2(exporter);
     await collector.nextStatusIdle();
-    expect(driver.knownFiles.resources, isNot(contains(a)));
-    expect(driver.knownFiles.resources, isNot(contains(b)));
-    expect(driver.knownFiles.resources, contains(other));
+    expect(driver.knownFiles.resources, isNot(contains(exporter)));
+    expect(driver.knownFiles.resources, isNot(contains(dependency)));
+    expect(driver.knownFiles.resources, contains(unrelated));
   }
 
   test_removeFile_deletePart() async {
-    var a = newFile('$testPackageLibPath/a.dart', "part 'p.dart';");
-    var part = newFile(
-      '$testPackageLibPath/p.dart',
-      "part of 'a.dart'; class P {}",
+    var library = newFile(
+      '$testPackageLibPath/library.dart',
+      "part 'part.dart';",
     );
-    var b = newFile('$testPackageLibPath/b.dart', "import 'a.dart'; P? value;");
-    var driver = driverFor(a);
+    var part = newFile(
+      '$testPackageLibPath/part.dart',
+      "part of 'library.dart'; class P {}",
+    );
+    var importer = newFile(
+      '$testPackageLibPath/importer.dart',
+      "import 'library.dart'; P? value;",
+    );
+    var driver = driverFor(library);
     var collector = DriverEventCollector(driver);
-    for (var file in [a, part, b]) {
+    for (var file in [library, part, importer]) {
       driver.addFile2(file);
     }
     await collector.nextStatusIdle();
@@ -5811,12 +5822,8 @@ class A {}
     deleteFile(part.path);
     driver.removeFile2(part);
     await collector.nextStatusIdle();
-    var results = collector
-        .take()
-        .whereType<ResultStreamEvent>()
-        .map((event) => event.object)
-        .whereType<AnalysisResultWithDiagnostics>();
-    for (var file in [a, b]) {
+    var results = collector.takeDiagnosticResults();
+    for (var file in [library, importer]) {
       expect(
         results.singleWhere((result) => result.path == file.path).diagnostics,
         isNotEmpty,
@@ -6455,6 +6462,16 @@ class DriverEventCollector {
     var result = _events.toList();
     _events.clear();
     return result;
+  }
+
+  List<AnalysisResultWithDiagnostics> takeDiagnosticResults() {
+    return [
+      for (var event in take())
+        if (event case ResultStreamEvent(
+          object: AnalysisResultWithDiagnostics result,
+        ))
+          result,
+    ];
   }
 
   void _addPending<T>(

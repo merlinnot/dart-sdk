@@ -57,7 +57,6 @@ import 'package:pub_semver/pub_semver.dart';
 /// kinds.
 sealed class DirectiveState {
   final FileKind container;
-
   final DirectiveUris uris;
 
   new({required this.container, required this.uris});
@@ -82,6 +81,13 @@ class DirectiveUris {
     required this.configurations,
     required this.selected,
   });
+
+  Iterable<FileState> get referencedFiles sync* {
+    if (primary case DirectiveUriWithFile(:var file)) yield file;
+    for (var uri in configurations) {
+      if (uri case DirectiveUriWithFile(:var file)) yield file;
+    }
+  }
 }
 
 /// [DirectiveUriWithUri] with URI that resolves to a [FileState].
@@ -183,7 +189,7 @@ abstract class FileKind {
 
   /// Already resolved file references, including unselected conditional URIs
   /// and the container named by a part. Reading these must not discover files.
-  Iterable<FileState> get cachedReferences sync* {
+  Iterable<FileState> get _cachedReferences sync* {
     if (this case PartOfUriKnownFileKind(:var uriFile)) yield uriFile;
     if (this case PartOfNameFileKind(:var libraries)) {
       yield* libraries.map((library) => library.file);
@@ -194,11 +200,7 @@ abstract class FileKind {
       ...?_partIncludes,
       ...?_docLibraryImports,
     ]) {
-      var uris = directive.uris;
-      if (uris.primary case DirectiveUriWithFile(:var file)) yield file;
-      for (var uri in uris.configurations) {
-        if (uri case DirectiveUriWithFile(:var file)) yield file;
-      }
+      yield* directive.uris.referencedFiles;
     }
   }
 
@@ -1401,14 +1403,14 @@ class FileSystemState {
   void collectAffected(
     String path,
     Set<FileState> affected, {
-    Map<FileState, Set<FileState>>? cachedReferrers,
+    Map<FileState, Set<FileState>>? additionalReferrers,
   }) {
     collectAffected(FileState file) {
       if (affected.add(file)) {
         for (var other in file.referencingFiles) {
           collectAffected(other);
         }
-        for (var other in cachedReferrers?[file] ?? const <FileState>{}) {
+        for (var other in additionalReferrers?[file] ?? const <FileState>{}) {
           collectAffected(other);
         }
       }
@@ -1615,14 +1617,8 @@ class FileSystemState {
   /// Reverse lookup for all materialized directives. Ordinary change tracking
   /// only follows selected imports, exports, and part inclusions. Deletion can
   /// also affect URI diagnostics in other directives.
-  Map<FileState, Set<FileState>> cachedReferrers() {
-    var result = <FileState, Set<FileState>>{};
-    for (var file in knownFiles) {
-      for (var target in file.kind.cachedReferences) {
-        (result[target] ??= {}).add(file);
-      }
-    }
-    return result;
+  Map<FileState, Set<FileState>> computeDeletionReferrers() {
+    return _reverseReferences((file) => file.kind._cachedReferences);
   }
 
   /// Discards cached files no longer reachable from an explicit analysis root.
@@ -1634,19 +1630,14 @@ class FileSystemState {
   ) {
     // Recovered library kinds can also own references (e.g. an orphan part
     // analyzed as a library). Those are recorded on the referenced file.
-    var referencedBy = <FileState, List<FileState>>{};
-    for (var file in knownFiles) {
-      for (var referrer in file.referencingFiles) {
-        (referencedBy[referrer] ??= []).add(file);
-      }
-    }
+    var targetsByReferrer = _reverseReferences((file) => file.referencingFiles);
     var retained = <FileState>{};
     var pending = [for (var path in roots) ?_pathToFile[path]];
     while (pending.isNotEmpty) {
       var file = pending.removeLast();
       if (retained.add(file)) {
-        pending.addAll(file.kind.cachedReferences);
-        if (referencedBy[file] case var targets?) pending.addAll(targets);
+        pending.addAll(file.kind._cachedReferences);
+        pending.addAll(targetsByReferrer[file] ?? const <FileState>{});
       }
     }
 
@@ -1699,6 +1690,18 @@ class FileSystemState {
       units.clear();
       _unlinkedUnitsForLinking = null;
     }
+  }
+
+  Map<FileState, Set<FileState>> _reverseReferences(
+    Iterable<FileState> Function(FileState) referencesOf,
+  ) {
+    var result = <FileState, Set<FileState>>{};
+    for (var file in knownFiles) {
+      for (var reference in referencesOf(file)) {
+        (result[reference] ??= {}).add(file);
+      }
+    }
+    return result;
   }
 
   /// Clear all [FileState] data - all maps from path or URI, etc.

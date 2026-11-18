@@ -1582,34 +1582,29 @@ class AnalysisDriver {
   }
 
   void _applyPendingFileChanges() {
-    var accumulatedAffected = <String>{};
+    var affectedPaths = <String>{};
     Map<FileState, Set<FileState>>? deletionReferrers;
-    for (var fileChange in _pendingFileChanges) {
-      var path = fileChange.path;
-      // In generated workspaces deletion can also change URI-to-path mappings.
-      var incrementalDeletion =
-          fileChange.kind == FileChangeKind.remove &&
-          analysisContext?.contextRoot.workspace is SimpleWorkspace &&
-          !_resourceProvider.getFile(path).exists;
-      var affected = _removePotentiallyAffectedLibraries(
-        accumulatedAffected,
+
+    for (var change in _pendingFileChanges) {
+      var path = change.path;
+      var incrementalDeletion = _canHandleDeletionIncrementally(change);
+      if (incrementalDeletion) {
+        deletionReferrers ??= _fsState.computeDeletionReferrers();
+      }
+      var affected = _invalidateLibraries(
         path,
-        cachedReferrers: incrementalDeletion
-            ? deletionReferrers ??= _fsState.cachedReferrers()
-            : null,
+        additionalReferrers: incrementalDeletion ? deletionReferrers : null,
       );
-      switch (fileChange.kind) {
+      affectedPaths.addAll(affected.map((file) => file.path));
+
+      switch (change.kind) {
         case FileChangeKind.add:
           _fileTracker.addFile(path);
         case FileChangeKind.change:
           _fileTracker.changeFile(path);
         case FileChangeKind.remove:
           if (incrementalDeletion) {
-            var affectedUnits = {
-              ...affected,
-              for (var file in affected) ...?file.kind.library?.files,
-            };
-            _fileTracker.removeFile(path, affected: affectedUnits);
+            _fileTracker.removeDeletedFile(path, affected);
           } else {
             _fileTracker.removeFile(path);
             clearLibraryContext();
@@ -1632,9 +1627,17 @@ class AnalysisDriver {
       var completers = _pendingFileChangesCompleters.toList();
       _pendingFileChangesCompleters.clear();
       for (var completer in completers) {
-        completer.complete(accumulatedAffected.toList());
+        completer.complete(affectedPaths.toList());
       }
     }
+  }
+
+  bool _canHandleDeletionIncrementally(FileChange change) {
+    // Generated workspaces can resolve the same URI to a new path after deletion.
+    // Removing a file that still exists only unregisters an analysis root.
+    return change.kind == FileChangeKind.remove &&
+        analysisContext?.contextRoot.workspace is SimpleWorkspace &&
+        !_resourceProvider.getFile(change.path).exists;
   }
 
   /// Completes pending requests if a required SDK library is missing.
@@ -2300,13 +2303,16 @@ class AnalysisDriver {
     }
   }
 
-  Set<FileState> _removePotentiallyAffectedLibraries(
-    Set<String> accumulatedAffected,
+  Set<FileState> _invalidateLibraries(
     String path, {
-    Map<FileState, Set<FileState>>? cachedReferrers,
+    Map<FileState, Set<FileState>>? additionalReferrers,
   }) {
     var affected = <FileState>{};
-    _fsState.collectAffected(path, affected, cachedReferrers: cachedReferrers);
+    _fsState.collectAffected(
+      path,
+      affected,
+      additionalReferrers: additionalReferrers,
+    );
 
     var removedKeys = <String>{};
     _libraryContext?.remove(affected, removedKeys);
@@ -2317,7 +2323,6 @@ class AnalysisDriver {
       if (kind is LibraryFileKind) {
         kind.disposeLibraryCycle();
       }
-      accumulatedAffected.add(file.path);
     }
 
     if (_fsState.getExistingFromPath(path) case var changedFile?) {

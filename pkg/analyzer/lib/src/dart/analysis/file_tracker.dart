@@ -134,22 +134,23 @@ class FileTracker {
         _pendingFiles.contains(path);
   }
 
-  /// Removes the given [path] from the set of "added files".
-  void removeFile(String path, {Set<FileState>? affected}) {
-    _fileContentStrategy.markFileForReading(path);
-    addedFiles.remove(path);
-    fileWasAnalyzed(path);
-    _changedFiles.remove(path);
-    if (affected != null) {
-      // Schedule roots that referenced the file before refreshing its contents.
-      for (var file in affected) {
-        if (addedFiles.contains(file.path)) {
-          _pendingFiles.add(file.path);
-        }
-      }
-      _fsState.getExistingFromPath(path)?.refresh();
-      return;
+  /// Removes a deleted file and schedules the registered units of affected libraries.
+  void removeDeletedFile(String path, Set<FileState> affected) {
+    _stopTracking(path);
+    // Read part membership before refreshing the deleted file.
+    var affectedUnits = {
+      ...affected,
+      for (var file in affected) ...?file.kind.library?.files,
+    };
+    for (var unit in affectedUnits) {
+      if (addedFiles.contains(unit.path)) _pendingFiles.add(unit.path);
     }
+    _fsState.getExistingFromPath(path)?.refresh();
+  }
+
+  /// Removes an analysis root and rebuilds the remaining roots.
+  void removeFile(String path) {
+    _stopTracking(path);
     _fsState.removeFile(path);
     _pendingFiles.addAll(addedFiles);
   }
@@ -237,6 +238,13 @@ class FileTracker {
       return true;
     }
     return false;
+  }
+
+  void _stopTracking(String path) {
+    _fileContentStrategy.markFileForReading(path);
+    addedFiles.remove(path);
+    _changedFiles.remove(path);
+    fileWasAnalyzed(path);
   }
 }
 
