@@ -918,7 +918,12 @@ class FileState {
     if (_driverUnlinkedUnit != null) {
       for (var name in _driverUnlinkedUnit!.subtypedNames) {
         var files = _fsState._subtypedNameToFiles[name];
-        files?.remove(this);
+        if (files != null) {
+          files.remove(this);
+          if (files.isEmpty) {
+            _fsState._subtypedNameToFiles.remove(name);
+          }
+        }
       }
     }
   }
@@ -1375,6 +1380,7 @@ class FileSystemState {
   /// was changed. Specifically this means that we evict this file and every
   /// file that referenced it.
   void changeFile(String path) {
+    _hasUriForPath.remove(path);
     var file = _pathToFile.remove(path);
     if (file == null) {
       return;
@@ -1609,6 +1615,12 @@ class FileSystemState {
     return flag;
   }
 
+  /// Refresh a deleted file that other files may still reference.
+  void refreshDeletedFile(String path) {
+    _hasUriForPath.remove(path);
+    _pathToFile[path]?.refresh();
+  }
+
   /// Remove the file with the given [path].
   void removeFile(String path) {
     _clearFiles();
@@ -1768,6 +1780,8 @@ class FileSystemStateTestView {
   final FileSystemState state;
 
   new(this.state);
+
+  Iterable<String> get cachedUriPaths => state._hasUriForPath.keys;
 
   Map<Uri, FileState> get uriToFile => state._uriToFile;
 }

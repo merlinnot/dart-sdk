@@ -137,15 +137,11 @@ class FileTracker {
   /// Removes a deleted file and schedules the registered units of affected libraries.
   void removeDeletedFile(String path, Set<FileState> affected) {
     _stopTracking(path);
-    // Read part membership before refreshing the deleted file.
-    var affectedUnits = {
-      ...affected,
-      for (var file in affected) ...?file.kind.library?.files,
-    };
-    for (var unit in affectedUnits) {
-      if (addedFiles.contains(unit.path)) _pendingFiles.add(unit.path);
+    // Deletion referrers already include parts that name an affected library.
+    for (var file in affected) {
+      if (addedFiles.contains(file.path)) _pendingFiles.add(file.path);
     }
-    _fsState.getExistingFromPath(path)?.refresh();
+    _fsState.refreshDeletedFile(path);
   }
 
   /// Removes an analysis root and rebuilds the remaining roots.

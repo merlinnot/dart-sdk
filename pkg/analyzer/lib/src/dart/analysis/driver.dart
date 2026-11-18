@@ -2325,9 +2325,10 @@ class AnalysisDriver {
       }
     }
 
-    if (_fsState.getExistingFromPath(path) case var changedFile?) {
-      var changedLibrary = changedFile.kind.library;
-      changedLibrary?.invalidateDiagnosticsBundleKey();
+    // Deletion already invalidated every known owner in the affected set.
+    if (additionalReferrers == null) {
+      var changedFile = _fsState.getExistingFromPath(path);
+      changedFile?.kind.library?.invalidateDiagnosticsBundleKey();
     }
 
     _libraryContext?.elementFactory.replaceAnalysisSession(

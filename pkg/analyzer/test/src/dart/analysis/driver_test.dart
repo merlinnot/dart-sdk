@@ -5776,6 +5776,37 @@ class A {}
     }
   }
 
+  test_removeFile_deleteContainingLibrary() async {
+    var library = newFile(
+      '$testPackageLibPath/library.dart',
+      "library example; part 'named.dart'; part 'uri.dart'; class Value {}",
+    );
+    var namedPart = newFile(
+      '$testPackageLibPath/named.dart',
+      'part of example; Value? a;',
+    );
+    var uriPart = newFile(
+      '$testPackageLibPath/uri.dart',
+      "part of 'library.dart'; Value? b;",
+    );
+    var driver = driverFor(library);
+    var collector = DriverEventCollector(driver);
+    for (var file in [library, namedPart, uriPart]) {
+      driver.addFile2(file);
+    }
+    await collector.nextStatusIdle();
+    collector.take();
+
+    deleteFile(library.path);
+    driver.removeFile2(library);
+    await collector.nextStatusIdle();
+    var results = collector.takeDiagnosticResults();
+    for (var part in [namedPart, uriPart]) {
+      var result = results.singleWhere((result) => result.path == part.path);
+      expect(result.diagnostics, isNotEmpty);
+    }
+  }
+
   test_removeFile_deleteLastImporter() async {
     var exporter = newFile(
       '$testPackageLibPath/exporter.dart',
@@ -5796,6 +5827,31 @@ class A {}
     expect(driver.knownFiles.resources, isNot(contains(exporter)));
     expect(driver.knownFiles.resources, isNot(contains(dependency)));
     expect(driver.knownFiles.resources, contains(unrelated));
+  }
+
+  test_removeFile_deleteLastImporterOfOrphanPart() async {
+    var importer = newFile(
+      '$testPackageLibPath/importer.dart',
+      "import 'orphan.dart';",
+    );
+    var orphan = newFile('$testPackageLibPath/orphan.dart', 'part of missing;');
+    var keep = newFile('$testPackageLibPath/keep.dart', '');
+    var driver = driverFor(keep);
+    var collector = DriverEventCollector(driver);
+    driver.addFile2(importer);
+    driver.addFile2(keep);
+    await collector.nextStatusIdle();
+    expect(driver.knownFiles.resources, contains(orphan));
+
+    var sibling = newFile(
+      '$testPackageLibPath/sibling.dart',
+      'class Sibling {}',
+    );
+    deleteFile(importer.path);
+    driver.removeFile2(importer);
+    await collector.nextStatusIdle();
+    expect(driver.fsState.getFilesWithTopLevelDeclarations('Sibling'), isEmpty);
+    expect(driver.knownFiles.resources, isNot(contains(sibling)));
   }
 
   test_removeFile_deletePart() async {
@@ -5829,6 +5885,38 @@ class A {}
         isNotEmpty,
       );
     }
+  }
+
+  test_removeFile_evictIndexes() async {
+    var removed = newFile(
+      '$testPackageLibPath/removed.dart',
+      'class A extends Shared {} class B extends Unique {}',
+    );
+    var keep = newFile(
+      '$testPackageLibPath/keep.dart',
+      'class C extends Shared {}',
+    );
+    var driver = driverFor(keep);
+    var collector = DriverEventCollector(driver);
+    driver.addFile2(removed);
+    driver.addFile2(keep);
+    await collector.nextStatusIdle();
+    var fs = driver.fsState;
+    expect(fs.getFilesSubtypingName('Unique')!.single.resource, removed);
+    expect(fs.test.cachedUriPaths, contains(removed.path));
+
+    // A removal can also arrive before the file has been analyzed.
+    var pending = newFile('$testPackageLibPath/pending.dart', '');
+    driver.addFile2(pending);
+    for (var file in [removed, pending]) {
+      deleteFile(file.path);
+      driver.removeFile2(file);
+    }
+    await collector.nextStatusIdle();
+    expect(fs.test.cachedUriPaths, isNot(contains(removed.path)));
+    expect(fs.test.cachedUriPaths, isNot(contains(pending.path)));
+    expect(fs.getFilesSubtypingName('Unique'), isNull);
+    expect(fs.getFilesSubtypingName('Shared')!.single.resource, keep);
   }
 
   test_removeFile_invalidate_importers() async {
