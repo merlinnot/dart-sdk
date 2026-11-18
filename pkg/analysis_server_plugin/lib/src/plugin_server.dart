@@ -94,8 +94,10 @@ class PluginServer {
   /// The most recent session analyzed by the plugins for each library path.
   final _analyzedLibraries = <String, AnalysisSession>{};
 
-  /// The session in which resolution was last requested for each library.
-  final _librariesBeingResolved = <String, AnalysisSession>{};
+  /// The last session in which cached diagnostics triggered a resolution request
+  /// for each library. Keep completed requests here so later diagnostics in
+  /// the same session do not request the library again.
+  final _lastResolutionRequestSessionByLibrary = <String, AnalysisSession>{};
 
   /// The next modification stamp for a changed file in the [_resourceProvider].
   int _overlayModificationStamp = 0;
@@ -657,7 +659,7 @@ class PluginServer {
     }
 
     _analyzedLibraries.clear();
-    _librariesBeingResolved.clear();
+    _lastResolutionRequestSessionByLibrary.clear();
     var contextCollection = AnalysisContextCollectionImpl(
       resourceProvider: _resourceProvider,
       includedPaths: includedPaths,
@@ -1024,7 +1026,7 @@ class PluginServer {
   }) async {
     if (_contextCollection case var contextCollection?) {
       _analyzedLibraries.clear();
-      _librariesBeingResolved.clear();
+      _lastResolutionRequestSessionByLibrary.clear();
       await _forAnalysisContexts(contextCollection, (analysisContext) async {
         final driver = analysisContext.driver;
         for (var path in modifiedPaths) {
@@ -1073,8 +1075,8 @@ class PluginServer {
       return;
     }
     if (libraryPath != null &&
-        _librariesBeingResolved[libraryPath] != session) {
-      _librariesBeingResolved[libraryPath] = session;
+        _lastResolutionRequestSessionByLibrary[libraryPath] != session) {
+      _lastResolutionRequestSessionByLibrary[libraryPath] = session;
       unawaited(_requestResolvedLibrary(analysisContext, libraryPath));
     }
   }
