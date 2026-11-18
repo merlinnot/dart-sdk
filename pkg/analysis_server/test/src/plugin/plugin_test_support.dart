@@ -13,14 +13,14 @@ import '../../support/sdk_paths.dart';
 /// A superclass for test classes that define tests that require plugins to be
 /// created on disk.
 abstract class PluginTestSupport {
-  /// The default content of the plugin. This is a minimal plugin that will only
-  /// respond correctly to version checks and to shutdown requests.
+  /// The default content of the plugin. This is a minimal plugin that
+  /// acknowledges context roots without analyzing them.
   static const _defaultPluginContent = r'''
-import 'dart:async';
 import 'dart:isolate';
+
+import 'package:analyzer/dart/analysis/analysis_context.dart';
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/file_system/physical_file_system.dart';
-import 'package:analyzer/src/dart/analysis/driver.dart';
 import 'package:analyzer_plugin/plugin/plugin.dart';
 import 'package:analyzer_plugin/protocol/protocol_generated.dart';
 import 'package:analyzer_plugin/starter.dart';
@@ -32,7 +32,7 @@ void main(List<String> args, SendPort sendPort) {
 }
 
 class MinimalPlugin extends ServerPlugin {
-  MinimalPlugin(ResourceProvider provider) : super(provider);
+  MinimalPlugin(ResourceProvider provider) : super(resourceProvider: provider);
 
   @override
   List<String> get fileGlobsToAnalyze => <String>['**/*.dart'];
@@ -44,7 +44,15 @@ class MinimalPlugin extends ServerPlugin {
   String get version => '0.0.1';
 
   @override
-  AnalysisDriverGeneric createAnalysisDriver(ContextRoot contextRoot) => null;
+  Future<void> analyzeFile({
+    required AnalysisContext analysisContext,
+    required String path,
+  }) async {}
+
+  @override
+  Future<AnalysisSetContextRootsResult> handleAnalysisSetContextRoots(
+      AnalysisSetContextRootsParams parameters) async =>
+    new AnalysisSetContextRootsResult();
 
   @override
   Future<AnalysisHandleWatchEventsResult> handleAnalysisHandleWatchEvents(
