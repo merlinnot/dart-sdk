@@ -131,7 +131,7 @@ class PluginManagerFromDiskTest extends PluginTestSupport {
 
           var firstContext = ContextRoot(root.root.path, []);
           var secondContext = ContextRoot(secondRoot.root.path, []);
-          var expectedRequests = <RequestParams>[
+          _expectPluginRequestsInOrder(log, [
             configurations,
             AnalysisSetContextRootsParams([firstContext]),
             AnalysisSetAnalysisRootsParams([firstContext.root], []),
@@ -142,19 +142,7 @@ class PluginManagerFromDiskTest extends PluginTestSupport {
               secondContext.root,
             ], []),
             updatedConfigurations,
-          ].map((params) => params.toRequest('')).toList();
-          var methods = expectedRequests
-              .map((request) => request.method)
-              .toSet();
-          var requests = log.capturedEntries
-              .where(
-                (entry) => entry.isMessage && entry.sender == ProcessId.server,
-              )
-              .map((entry) => entry.message)
-              .where((message) => methods.contains(message.method))
-              .map((message) => {...message.map, 'id': ''})
-              .toList();
-          expect(requests, expectedRequests.map((request) => request.toJson()));
+          ]);
         } finally {
           await manager.stopAll();
         }
@@ -460,6 +448,25 @@ class PluginManagerFromDiskTest extends PluginTestSupport {
       },
     );
     pkg1Dir.deleteSync(recursive: true);
+  }
+
+  void _expectPluginRequestsInOrder(
+    SessionLoggerInMemorySink log,
+    List<RequestParams> expectedParams,
+  ) {
+    // The session assigns request IDs at runtime.
+    var expected = expectedParams
+        .map((params) => params.toRequest(''))
+        .toList();
+    var methods = expected.map((request) => request.method).toSet();
+    var actual = [
+      for (var entry in log.capturedEntries)
+        if (entry.isMessage &&
+            entry.sender == ProcessId.server &&
+            methods.contains(entry.message.method))
+          {...entry.message.map, 'id': ''},
+    ];
+    expect(actual, expected.map((request) => request.toJson()));
   }
 
   ContextRootImpl _newContextRoot(String root) {
