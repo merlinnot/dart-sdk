@@ -64,6 +64,7 @@ import 'package:analyzer/src/utilities/extensions/collection.dart';
 import 'package:analyzer/src/utilities/extensions/object.dart';
 import 'package:analyzer/src/utilities/uri_cache.dart';
 import 'package:analyzer/src/workspace/pub.dart';
+import 'package:analyzer/src/workspace/simple.dart';
 import 'package:collection/collection.dart';
 import 'package:meta/meta.dart';
 import 'package:pub_semver/pub_semver.dart';
@@ -1582,26 +1583,50 @@ class AnalysisDriver {
 
   void _applyPendingFileChanges() {
     var accumulatedAffected = <String>{};
+    Map<FileState, Set<FileState>>? deletionReferrers;
     for (var fileChange in _pendingFileChanges) {
       var path = fileChange.path;
-      _removePotentiallyAffectedLibraries(accumulatedAffected, path);
+      // In generated workspaces deletion can also change URI-to-path mappings.
+      var incrementalDeletion =
+          fileChange.kind == FileChangeKind.remove &&
+          analysisContext?.contextRoot.workspace is SimpleWorkspace &&
+          !_resourceProvider.getFile(path).exists;
+      var affected = _removePotentiallyAffectedLibraries(
+        accumulatedAffected,
+        path,
+        cachedReferrers: incrementalDeletion
+            ? deletionReferrers ??= _fsState.cachedReferrers()
+            : null,
+      );
       switch (fileChange.kind) {
         case FileChangeKind.add:
           _fileTracker.addFile(path);
         case FileChangeKind.change:
           _fileTracker.changeFile(path);
         case FileChangeKind.remove:
-          _fileTracker.removeFile(path);
+          if (incrementalDeletion) {
+            var affectedUnits = {
+              ...affected,
+              for (var file in affected) ...?file.kind.library?.files,
+            };
+            _fileTracker.removeFile(path, affected: affectedUnits);
+          } else {
+            _fileTracker.removeFile(path);
+            clearLibraryContext();
+            deletionReferrers = null;
+          }
           _resetAvailableFilesDiscovery();
-          // TODO(scheglov): We have to do this because we discard files.
-          // But this is not right, we need to handle removing better.
-          clearLibraryContext();
       }
     }
     _pendingFileChanges.clear();
 
     // Read files, so that synchronous methods also see new content.
     while (_fileTracker.verifyChangedFilesIfNeeded()) {}
+    if (deletionReferrers != null) {
+      _fsState.discardUnreachableFiles(_fileTracker.addedFiles, (unused) {
+        _libraryContext?.remove(unused, <String>{});
+      });
+    }
 
     if (_pendingFileChangesCompleters.isNotEmpty) {
       var completers = _pendingFileChangesCompleters.toList();
@@ -2275,12 +2300,13 @@ class AnalysisDriver {
     }
   }
 
-  void _removePotentiallyAffectedLibraries(
+  Set<FileState> _removePotentiallyAffectedLibraries(
     Set<String> accumulatedAffected,
-    String path,
-  ) {
+    String path, {
+    Map<FileState, Set<FileState>>? cachedReferrers,
+  }) {
     var affected = <FileState>{};
-    _fsState.collectAffected(path, affected);
+    _fsState.collectAffected(path, affected, cachedReferrers: cachedReferrers);
 
     var removedKeys = <String>{};
     _libraryContext?.remove(affected, removedKeys);
@@ -2302,6 +2328,7 @@ class AnalysisDriver {
     _libraryContext?.elementFactory.replaceAnalysisSession(
       AnalysisSessionImpl(this),
     );
+    return affected;
   }
 
   void _reportException(

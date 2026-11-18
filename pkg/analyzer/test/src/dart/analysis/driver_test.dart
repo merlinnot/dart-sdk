@@ -3094,7 +3094,6 @@ class B extends A {}
 [operation] analyzeFile
   file: /home/test/lib/b.dart
   library: /home/test/lib/b.dart
-[operation] reuseLinkedBundle SDK
 [stream]
   ResolvedUnitResult #2
     path: /home/test/lib/b.dart
@@ -5729,6 +5728,102 @@ class A {}
 ''');
   }
 
+  test_removeFile_deleteAndRestore() async {
+    var a = newFile('$testPackageLibPath/a.dart', 'class A {}');
+    var b = newFile('$testPackageLibPath/b.dart', "export 'a.dart';");
+    var c = newFile('$testPackageLibPath/c.dart', "import 'b.dart'; A? value;");
+    var unrelated = newFile('$testPackageLibPath/unrelated.dart', '');
+    var driver = driverFor(a);
+    var collector = DriverEventCollector(driver);
+    for (var file in [a, b, c, unrelated]) {
+      driver.addFile2(file);
+    }
+    await collector.nextStatusIdle();
+    collector.take();
+    var unrelatedState = driver.fsState.getExisting(unrelated)!;
+
+    // Both notifications can arrive before the driver gets to the edit.
+    driver.changeFile2(a);
+    deleteFile(a.path);
+    driver.removeFile2(a);
+    await collector.nextStatusIdle();
+    var events = collector.take().whereType<ResultStreamEvent>();
+    var results = events
+        .map((event) => event.object)
+        .whereType<AnalysisResultWithDiagnostics>();
+    expect(
+      results.map((result) => result.path),
+      unorderedEquals([b.path, c.path]),
+    );
+    expect(results.every((result) => result.diagnostics.isNotEmpty), isTrue);
+    expect(driver.fsState.getExisting(unrelated), same(unrelatedState));
+
+    newFile(a.path, 'class A {}');
+    driver.addFile2(a);
+    await collector.nextStatusIdle();
+    var restored = collector
+        .take()
+        .whereType<ResultStreamEvent>()
+        .map((event) => event.object)
+        .whereType<AnalysisResultWithDiagnostics>();
+    for (var file in [b, c]) {
+      expect(
+        restored.singleWhere((result) => result.path == file.path).diagnostics,
+        isEmpty,
+      );
+    }
+  }
+
+  test_removeFile_deleteLastImporter() async {
+    var a = newFile('$testPackageLibPath/a.dart', "export 'b.dart';");
+    var b = newFile('$testPackageLibPath/b.dart', '');
+    var other = newFile('$testPackageLibPath/other.dart', '');
+    var driver = driverFor(a);
+    var collector = DriverEventCollector(driver);
+    driver.addFile2(a);
+    driver.addFile2(other);
+    await collector.nextStatusIdle();
+    expect(driver.knownFiles.resources, contains(b));
+
+    deleteFile(a.path);
+    driver.removeFile2(a);
+    await collector.nextStatusIdle();
+    expect(driver.knownFiles.resources, isNot(contains(a)));
+    expect(driver.knownFiles.resources, isNot(contains(b)));
+    expect(driver.knownFiles.resources, contains(other));
+  }
+
+  test_removeFile_deletePart() async {
+    var a = newFile('$testPackageLibPath/a.dart', "part 'p.dart';");
+    var part = newFile(
+      '$testPackageLibPath/p.dart',
+      "part of 'a.dart'; class P {}",
+    );
+    var b = newFile('$testPackageLibPath/b.dart', "import 'a.dart'; P? value;");
+    var driver = driverFor(a);
+    var collector = DriverEventCollector(driver);
+    for (var file in [a, part, b]) {
+      driver.addFile2(file);
+    }
+    await collector.nextStatusIdle();
+    collector.take();
+
+    deleteFile(part.path);
+    driver.removeFile2(part);
+    await collector.nextStatusIdle();
+    var results = collector
+        .take()
+        .whereType<ResultStreamEvent>()
+        .map((event) => event.object)
+        .whereType<AnalysisResultWithDiagnostics>();
+    for (var file in [a, b]) {
+      expect(
+        results.singleWhere((result) => result.path == file.path).diagnostics,
+        isNotEmpty,
+      );
+    }
+  }
+
   test_removeFile_invalidate_importers() async {
     var a = newFile('$testPackageLibPath/a.dart', r'''
 class A {}
@@ -5772,7 +5867,6 @@ final a = new A();
     driver.removeFile2(a);
     await assertEventsText(collector, r'''
 [status] working
-[operation] reuseLinkedBundle SDK
 [operation] analyzeFile
   file: /home/test/lib/b.dart
   library: /home/test/lib/b.dart

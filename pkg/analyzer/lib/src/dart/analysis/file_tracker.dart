@@ -135,15 +135,21 @@ class FileTracker {
   }
 
   /// Removes the given [path] from the set of "added files".
-  void removeFile(String path) {
+  void removeFile(String path, {Set<FileState>? affected}) {
     _fileContentStrategy.markFileForReading(path);
     addedFiles.remove(path);
-    _pendingChangedFiles.remove(path);
-    _pendingImportFiles.remove(path);
-    _pendingErrorFiles.remove(path);
-    _pendingFiles.remove(path);
-    // TODO(paulberry): removing the path from [fsState] and re-analyzing all
-    // files seems extreme.
+    fileWasAnalyzed(path);
+    _changedFiles.remove(path);
+    if (affected != null) {
+      // Schedule roots that referenced the file before refreshing its contents.
+      for (var file in affected) {
+        if (addedFiles.contains(file.path)) {
+          _pendingFiles.add(file.path);
+        }
+      }
+      _fsState.getExistingFromPath(path)?.refresh();
+      return;
+    }
     _fsState.removeFile(path);
     _pendingFiles.addAll(addedFiles);
   }
