@@ -825,29 +825,7 @@ class PrefixScope implements Scope {
   }
 
   void _add(Element element, bool isFromDeprecatedExport) {
-    if (element is SetterElement) {
-      _addTo(
-        element,
-        isFromDeprecatedExport: isFromDeprecatedExport,
-        isSetter: true,
-      );
-    } else {
-      _addTo(
-        element,
-        isFromDeprecatedExport: isFromDeprecatedExport,
-        isSetter: false,
-      );
-      if (element is ExtensionElement) {
-        _extensions.add(element);
-      }
-    }
-  }
-
-  void _addTo(
-    Element element, {
-    required bool isFromDeprecatedExport,
-    required bool isSetter,
-  }) {
+    var isSetter = element is SetterElement;
     var map = isSetter ? _setters : _getters;
     var id = element.displayName;
     var existing = map[id];
