@@ -5,6 +5,7 @@
 import 'dart:io' as io;
 
 import 'package:analyzer/file_system/physical_file_system.dart';
+import 'package:package_config/package_config.dart';
 import 'package:path/path.dart' as path;
 
 import '../../mocks.dart';
@@ -80,7 +81,7 @@ class MinimalPlugin extends ServerPlugin {
   /// ```
   /// <pluginDirectory>
   ///   .dart_tool/
-  ///     package_config.dart
+  ///     package_config.json
   ///   bin/
   ///     plugin.dart
   /// ```
@@ -98,15 +99,9 @@ class MinimalPlugin extends ServerPlugin {
     var tempDirectory = io.Directory.systemTemp.createTempSync(pluginName);
     try {
       var pluginPath = tempDirectory.resolveSymbolicLinksSync();
-      // Create a package config file.
-      var pluginDartToolPath = path.join(pluginPath, '.dart_tool');
-      io.Directory(pluginDartToolPath).createSync();
-      var packageConfigFile = io.File(
-        path.join(pluginDartToolPath, 'package_config.json'),
-      );
-      packageConfigFile.writeAsStringSync(
-        io.File(sdkPackageConfigPath).readAsStringSync(),
-      );
+      // Resolve package roots against the SDK config before relocating them.
+      var config = await loadPackageConfig(io.File(sdkPackageConfigPath));
+      await savePackageConfig(config, tempDirectory);
       //
       // Create the 'bin' directory.
       //
