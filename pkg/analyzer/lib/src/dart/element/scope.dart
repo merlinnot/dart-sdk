@@ -218,8 +218,8 @@ class ImportsTracking {
 class ImportsTrackingOfPrefix {
   final PrefixScope scope;
 
-  /// Suppliers in import order, cached only for elements queried in this scope.
-  final Map<Element, List<LibraryImportImpl>> _elementImports = {};
+  /// Elements already recorded for every import that supplies them.
+  final Set<Element> _recordedElements = {};
 
   /// Key: an import.
   /// Value: used elements imported from the import.
@@ -294,30 +294,30 @@ class ImportsTrackingOfPrefix {
       return;
     }
 
-    var imports = _importsFor(element);
-    assert(imports.isNotEmpty);
-    for (var import in imports) {
-      (importToUsedElements[import] ??= {}).add(element);
-    }
+    _recordUse(element);
   }
 
   /// Records that [element] is used, and returns whether any import of
   /// this scope provides it.
   bool notifyExtensionUsed(ExtensionElement element) {
-    var imports = _importsFor(element);
-    for (var import in imports) {
-      (importToUsedElements[import] ??= {}).add(element);
+    if (!scope._extensions.contains(element)) {
+      return false;
     }
-    return imports.isNotEmpty;
+    _recordUse(element);
+    return true;
   }
 
   void notifyPrefixUsedWithoutName() {
     hasPrefixUsedWithoutName = true;
   }
 
-  List<LibraryImportImpl> _findImports(Element element) {
+  void _recordUse(Element element) {
+    if (!_recordedElements.add(element)) {
+      return;
+    }
+
     var name = element.displayName;
-    List<LibraryImportImpl>? imports;
+    var found = false;
     for (var source in scope._sources) {
       for (
         var export = source.exports._byName[name];
@@ -326,15 +326,13 @@ class ImportsTrackingOfPrefix {
       ) {
         if (export.element == element &&
             source.combinators.allows(export.entry.name)) {
-          (imports ??= []).add(source.directive);
+          (importToUsedElements[source.directive] ??= {}).add(element);
+          found = true;
+          break;
         }
       }
     }
-    return imports ?? const [];
-  }
-
-  List<LibraryImportImpl> _importsFor(Element element) {
-    return _elementImports[element] ??= _findImports(element);
+    assert(found);
   }
 }
 
