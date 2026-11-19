@@ -217,9 +217,13 @@ class ImportsTracking {
 class ImportsTrackingOfPrefix {
   final PrefixScope scope;
 
-  /// The imports that provide each element, in import order.
-  /// Elements with the same sole import share a fixed-length list.
-  /// Lists with multiple imports belong to one element and can grow.
+  /// Key: an element.
+  /// Value: the imports that provide the element.
+  ///
+  /// To avoid allocating a list per element, all elements provided by only
+  /// one import share that import's single-element list. Such a list must be
+  /// replaced, never modified. A list with two or more imports belongs to a
+  /// single element.
   final Map<Element, List<LibraryImportImpl>> _elementImports = {};
 
   /// Key: an import.
@@ -329,20 +333,18 @@ class ImportsTrackingOfPrefix {
       var importedLibrary = import.importedLibrary!;
       var elementFactory = importedLibrary.internal.elementFactory;
       var combinators = import.combinators.build();
-      var sharedImports = List.filled(1, import);
+      var soloImport = List.filled(1, import);
       for (var entry in importedLibrary.exportEntries) {
-        if (!combinators.allows(entry.name)) {
-          continue;
-        }
-
-        var element = elementFactory.elementOfReference3(entry.reference);
-        var imports = _elementImports[element];
-        if (imports == null) {
-          _elementImports[element] = sharedImports;
-        } else if (imports.length == 1) {
-          _elementImports[element] = [imports.first, import];
-        } else {
-          imports.add(import);
+        if (combinators.allows(entry.name)) {
+          var element = elementFactory.elementOfReference3(entry.reference);
+          var imports = _elementImports[element];
+          if (imports == null) {
+            _elementImports[element] = soloImport;
+          } else if (imports.length == 1) {
+            _elementImports[element] = [imports.single, import];
+          } else {
+            imports.add(import);
+          }
         }
       }
     }

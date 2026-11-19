@@ -337,6 +337,8 @@ import 'lib1.dart' as lib1;
   }
 
   test_library_extension_providedByTwoImports() async {
+    // Twice and Other have the same first two suppliers. Adding a third
+    // supplier for Other must leave the suppliers of Twice unchanged.
     newFile('$testPackageLibPath/a.dart', r'''
 extension Twice on int {
   int get twice => this * 2;
