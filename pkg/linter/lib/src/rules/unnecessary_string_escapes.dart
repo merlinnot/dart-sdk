@@ -72,7 +72,14 @@ class _Visitor(final AnalysisRule rule) extends SimpleAstVisitor<void> {
     ) {
       var character = text[i + 1];
       if (character == quote) {
-        if (!isMultiline || _needsQuoteEscape(text, quote, i, start, end)) {
+        if (!isMultiline ||
+            _needsQuoteEscape(
+              text,
+              quote,
+              i,
+              contentStart: start,
+              contentEnd: end,
+            )) {
           continue;
         }
       } else if (allowedEscapedChars.contains(character)) {
@@ -111,22 +118,23 @@ class _Visitor(final AnalysisRule rule) extends SimpleAstVisitor<void> {
   static bool _needsQuoteEscape(
     String text,
     String quote,
-    int escape,
-    int start,
-    int end,
-  ) {
+    int escape, {
+    required int contentStart,
+    required int contentEnd,
+  }) {
     // A quote immediately before the closing delimiter must stay escaped.
-    if (escape + 2 == end && end < text.length) return true;
+    if (escape + 2 == contentEnd && contentEnd < text.length) return true;
 
     // Three consecutive matching quotes could close the multiline string.
+    // Count both escaped and unescaped neighbors of this quote.
     var count = 1;
-    for (var i = escape - 1; i >= start && text[i] == quote; i--) {
+    for (var i = escape - 1; i >= contentStart && text[i] == quote; i--) {
       if (++count == 3) return true;
-      if (i > start && text[i - 1] == r'\') i--;
+      if (i > contentStart && text[i - 1] == r'\') i--;
     }
-    for (var i = escape + 2; i < end; i++) {
+    for (var i = escape + 2; i < contentEnd; i++) {
       if (text[i] == r'\') i++;
-      if (i >= end || text[i] != quote) break;
+      if (i >= contentEnd || text[i] != quote) break;
       if (++count == 3) return true;
     }
     return false;
