@@ -218,9 +218,7 @@ class ImportsTracking {
 class ImportsTrackingOfPrefix {
   final PrefixScope scope;
 
-  /// The imports that provide each element, in import order.
-  /// Elements with the same sole import share a fixed-length list.
-  /// Lists with multiple imports belong to one element and can grow.
+  /// Suppliers in import order, cached only for elements queried in this scope.
   final Map<Element, List<LibraryImportImpl>> _elementImports = {};
 
   /// Key: an import.
@@ -243,9 +241,7 @@ class ImportsTrackingOfPrefix {
   /// We set it temporarily to `false` while resolving combinators.
   bool active = true;
 
-  new({required this.scope}) {
-    _buildElementToImportsMap();
-  }
+  new({required this.scope});
 
   /// The elements that are used from [import].
   Set<Element> elementsOf(LibraryImportImpl import) {
@@ -298,8 +294,8 @@ class ImportsTrackingOfPrefix {
       return;
     }
 
-    // SAFETY: if we have `element`, it is from a local import.
-    var imports = _elementImports[element]!;
+    var imports = _importsFor(element);
+    assert(imports.isNotEmpty);
     for (var import in imports) {
       (importToUsedElements[import] ??= {}).add(element);
     }
@@ -308,42 +304,37 @@ class ImportsTrackingOfPrefix {
   /// Records that [element] is used, and returns whether any import of
   /// this scope provides it.
   bool notifyExtensionUsed(ExtensionElement element) {
-    var imports = _elementImports[element];
-    if (imports == null) {
-      return false;
-    }
+    var imports = _importsFor(element);
     for (var import in imports) {
       (importToUsedElements[import] ??= {}).add(element);
     }
-    return true;
+    return imports.isNotEmpty;
   }
 
   void notifyPrefixUsedWithoutName() {
     hasPrefixUsedWithoutName = true;
   }
 
-  void _buildElementToImportsMap() {
-    for (var import in scope._importElements) {
-      var importedLibrary = import.importedLibrary!;
-      var elementFactory = importedLibrary.internal.elementFactory;
-      var combinators = import.combinators.build();
-      var sharedImports = List.filled(1, import);
-      for (var entry in importedLibrary.exportEntries) {
-        if (!combinators.allows(entry.name)) {
-          continue;
-        }
-
-        var element = elementFactory.elementOfReference3(entry.reference);
-        var imports = _elementImports[element];
-        if (imports == null) {
-          _elementImports[element] = sharedImports;
-        } else if (imports.length == 1) {
-          _elementImports[element] = [imports.first, import];
-        } else {
-          imports.add(import);
+  List<LibraryImportImpl> _findImports(Element element) {
+    var name = element.displayName;
+    List<LibraryImportImpl>? imports;
+    for (var source in scope._sources) {
+      for (
+        var export = source.exports._byName[name];
+        export != null;
+        export = export.next
+      ) {
+        if (export.element == element &&
+            source.combinators.allows(export.entry.name)) {
+          (imports ??= []).add(source.directive);
         }
       }
     }
+    return imports ?? const [];
+  }
+
+  List<LibraryImportImpl> _importsFor(Element element) {
+    return _elementImports[element] ??= _findImports(element);
   }
 }
 
@@ -674,11 +665,9 @@ class PrefixScope implements Scope {
   /// [parent] is read, we record this requirement.
   final List<PrefixScope> _parentSearchedScopes;
 
-  final _sources =
-      <(LibraryElementImpl, SharedExportIndex, List<Combinator>)>[];
+  final _sources = <_ImportSource>[];
   final _lookedUpNames = <String>{};
 
-  final List<LibraryImportImpl> _importElements = [];
   final List<LibraryElementImpl> _importedLibraries = [];
 
   final Map<String, Element> _getters = {};
@@ -704,12 +693,16 @@ class PrefixScope implements Scope {
       var importedUri = import.uri;
       if (importedUri is DirectiveUriWithLibraryImpl &&
           import.prefix?.element == prefix) {
-        _importElements.add(import);
         var importedLibrary = importedUri.library;
         _importedLibraries.add(importedLibrary);
         var combinators = import.combinators.build();
         var exports = importedLibrary.sharedExportIndex;
-        _sources.add((importedLibrary, exports, combinators));
+        _sources.add((
+          directive: import,
+          library: importedLibrary,
+          exports: exports,
+          combinators: combinators,
+        ));
         for (var extension in exports._extensions.reversed) {
           if (combinators.allows(extension.entry.name)) {
             _extensions.add(extension.element as ExtensionElement);
@@ -902,15 +895,18 @@ class PrefixScope implements Scope {
 
   void _ensureName(String id) {
     if (!_lookedUpNames.add(id)) return;
-    for (var (library, exports, combinators) in _sources) {
+    for (var source in _sources) {
       for (
-        var export = exports._byName[id];
+        var export = source.exports._byName[id];
         export != null;
         export = export.next
       ) {
-        if (combinators.allows(export.entry.name) &&
-            _shouldAdd(library, export.element)) {
-          _add(export.element, library.isFromDeprecatedExport(export.entry));
+        if (source.combinators.allows(export.entry.name) &&
+            _shouldAdd(source.library, export.element)) {
+          _add(
+            export.element,
+            source.library.isFromDeprecatedExport(export.entry),
+          );
         }
       }
     }
@@ -1163,6 +1159,13 @@ mixin _GettersAndSetters {
     }
   }
 }
+
+typedef _ImportSource = ({
+  LibraryImportImpl directive,
+  LibraryElementImpl library,
+  SharedExportIndex exports,
+  List<Combinator> combinators,
+});
 
 extension on LibraryFragmentImpl {
   /// Whether [id] can be the name of an import prefix.
