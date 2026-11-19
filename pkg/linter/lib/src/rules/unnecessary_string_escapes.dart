@@ -36,10 +36,8 @@ class UnnecessaryStringEscapes extends AnalysisRule {
 }
 
 class _Visitor(final AnalysisRule rule) extends SimpleAstVisitor<void> {
-  /// The special escaped chars listed in language specification
+  /// Escape characters valid for either quote delimiter.
   static const allowedEscapedChars = [
-    '"',
-    "'",
     r'$',
     r'\',
     'n',
@@ -59,51 +57,29 @@ class _Visitor(final AnalysisRule rule) extends SimpleAstVisitor<void> {
     required int contentsOffset,
     required int contentsEnd,
   }) {
-    // Only tokens with a backslash need the character-by-character escape check.
-    if (!token.lexeme.contains(r'\')) return;
+    var text = token.lexeme;
+    var firstEscape = text.indexOf(r'\');
+    if (firstEscape < 0) return;
 
-    // For multiline string we keep the list on pending quotes.
-    // Starting from 3 consecutive quotes, we allow escaping.
-    // index -> escaped
-    var pendingQuotes = <int, bool>{};
-    void checkPendingQuotes() {
-      if (isMultiline && pendingQuotes.length < 3) {
-        var escapeIndexes = pendingQuotes.entries
-            .where((e) => e.value)
-            .map((e) => e.key);
-        for (var index in escapeIndexes) {
-          // case for '''___\'''' : without last backslash it leads a parsing error
-          if (contentsEnd != token.end && index + 2 == contentsEnd) continue;
-          rule.reportAtOffset(index, 1);
+    var start = contentsOffset - token.offset;
+    var end = contentsEnd - token.offset;
+    var quote = isSingleQuoted ? "'" : '"';
+    // Skip both characters of each escape so an escaped backslash is consumed.
+    for (
+      var i = firstEscape;
+      i >= 0 && i + 1 < end;
+      i = text.indexOf(r'\', i + 2)
+    ) {
+      var character = text[i + 1];
+      if (character == quote) {
+        if (!isMultiline || _needsQuoteEscape(text, quote, i, start, end)) {
+          continue;
         }
+      } else if (allowedEscapedChars.contains(character)) {
+        continue;
       }
+      rule.reportAtOffset(token.offset + i, 1);
     }
-
-    var lexeme = token.lexeme.substring(
-      contentsOffset - token.offset,
-      contentsEnd - token.offset,
-    );
-    for (var i = 0; i < lexeme.length; i++) {
-      var current = lexeme[i];
-      var escaped = false;
-      if (current == r'\' && i < lexeme.length - 1) {
-        escaped = true;
-        i += 1;
-        current = lexeme[i];
-        if (isSingleQuoted && current == '"' ||
-            !isSingleQuoted && current == "'" ||
-            !allowedEscapedChars.contains(current)) {
-          rule.reportAtOffset(contentsOffset + i - 1, 1);
-        }
-      }
-      if (isSingleQuoted ? current == "'" : current == '"') {
-        pendingQuotes[contentsOffset + i - (escaped ? 1 : 0)] = escaped;
-      } else {
-        checkPendingQuotes();
-        pendingQuotes.clear();
-      }
-    }
-    checkPendingQuotes();
   }
 
   @override
@@ -130,5 +106,29 @@ class _Visitor(final AnalysisRule rule) extends SimpleAstVisitor<void> {
         contentsEnd: element.contentsEnd,
       );
     }
+  }
+
+  static bool _needsQuoteEscape(
+    String text,
+    String quote,
+    int escape,
+    int start,
+    int end,
+  ) {
+    // A quote immediately before the closing delimiter must stay escaped.
+    if (escape + 2 == end && end < text.length) return true;
+
+    // Three consecutive matching quotes could close the multiline string.
+    var count = 1;
+    for (var i = escape - 1; i >= start && text[i] == quote; i--) {
+      if (++count == 3) return true;
+      if (i > start && text[i - 1] == r'\') i--;
+    }
+    for (var i = escape + 2; i < end; i++) {
+      if (text[i] == r'\') i++;
+      if (i >= end || text[i] != quote) break;
+      if (++count == 3) return true;
+    }
+    return false;
   }
 }
