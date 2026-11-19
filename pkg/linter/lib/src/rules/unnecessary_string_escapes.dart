@@ -58,15 +58,12 @@ class _Visitor(final AnalysisRule rule) extends SimpleAstVisitor<void> {
     required int contentsEnd,
   }) {
     var text = token.lexeme;
-    var firstEscape = text.indexOf(r'\');
-    if (firstEscape < 0) return;
-
     var start = contentsOffset - token.offset;
     var end = contentsEnd - token.offset;
     var quote = isSingleQuoted ? "'" : '"';
     // Skip both characters of each escape so an escaped backslash is consumed.
     for (
-      var i = firstEscape;
+      var i = text.indexOf(r'\');
       i >= 0 && i + 1 < end;
       i = text.indexOf(r'\', i + 2)
     ) {
