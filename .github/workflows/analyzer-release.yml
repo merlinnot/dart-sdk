@@ -39,34 +39,52 @@ jobs:
         include:
           - runner: macos-15
             platform: macos-arm64
-            checksum: 7319f3d4292124cc2341a004559a8e762c87ea196d2ff6fc93e95c3db996ed68
+            arch: arm64
+            output: xcodebuild/ReleaseARM64
           - runner: ubuntu-24.04
             platform: linux-x64
-            checksum: d699e9f52b04e36e1d39759d3c9d3569c681ae0664401c0f8e4602827cf98303
+            arch: x64
+            output: out/ReleaseX64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 35
+    timeout-minutes: 240
     env:
       PLATFORM: ${{ matrix.platform }}
-      SDK_SHA256: ${{ matrix.checksum }}
+      ARCH: ${{ matrix.arch }}
+      OUTPUT: ${{ matrix.output }}
+      DEPOT_TOOLS_UPDATE: '0'
     steps:
       - uses: actions/checkout@v4
         with:
+          path: sdk
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Build the server and bundle its plugin dependencies
+      - name: Fetch the pinned SDK toolchains and packages
         shell: bash
         run: |
           python -m pip install PyYAML==6.0.3
-          cd "$RUNNER_TEMP"
-          curl -fLSs --retry 3 -o runtime.zip \
-            "https://storage.googleapis.com/dart-archive/channels/dev/release/3.15.0-157.0.dev/sdk/dartsdk-$PLATFORM-release.zip"
-          echo "$SDK_SHA256  runtime.zip" | shasum -a 256 -c -
-          unzip -q runtime.zip
-          python "$GITHUB_WORKSPACE/tools/analyzer_release/build.py" dart-sdk
-          python "$GITHUB_WORKSPACE/tools/analyzer_release/smoke.py" dart-sdk/bin/dart --shared
-          tar -czf "analyzer-$PLATFORM.tar.gz" dart-sdk
+          git init -q "$RUNNER_TEMP/depot_tools"
+          git -C "$RUNNER_TEMP/depot_tools" fetch --depth=1 https://chromium.googlesource.com/chromium/tools/depot_tools.git c5d6eef1cc00425dea5b149cefe7068455ee4f56
+          git -C "$RUNNER_TEMP/depot_tools" checkout --quiet FETCH_HEAD
+          export PATH="$RUNNER_TEMP/depot_tools:$PATH"
+          echo "$RUNNER_TEMP/depot_tools" >> "$GITHUB_PATH"
+          gclient config --name sdk --unmanaged "https://github.com/$GITHUB_REPOSITORY.git"
+          gclient sync --nohooks --no-history --shallow --revision "sdk@$GITHUB_SHA"
+      - name: Build the VM, CLI and analyzer from the same commit
+        working-directory: sdk
+        shell: bash
+        run: |
+          python3 tools/generate_package_config.py
+          python3 tools/generate_sdk_version_file.py
+          python3 tools/build.py -m release -a "$ARCH" --no-rbe --no-siso -j 3 \
+            sdk:copy_dart sdk:copy_dartvm sdk:group_dart2native sdk:copy_kernel-service_snapshot \
+            sdk:copy_dartdev_aot_snapshot sdk:copy_libraries_specification sdk:copy_sdk_packages_yaml \
+            sdk:copy_vm_platform sdk:copy_vm_platform_strong sdk:copy_license \
+            sdk:write_version_file sdk:write_revision_file
+          python tools/analyzer_release/build.py "$OUTPUT/dart-sdk"
+          python tools/analyzer_release/smoke.py "$OUTPUT/dart-sdk/bin/dart" --shared
+          tar -C "$OUTPUT" -czf "$RUNNER_TEMP/analyzer-$PLATFORM.tar.gz" dart-sdk
       - uses: actions/upload-artifact@v4
         with:
           name: analyzer-${{ matrix.platform }}

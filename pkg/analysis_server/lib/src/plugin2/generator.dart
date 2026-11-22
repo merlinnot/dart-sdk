@@ -87,7 +87,7 @@ dependencies:
     const bundled = String.fromEnvironment('analyzer.release.packages');
     var overrides = {
       if (bundled.isNotEmpty)
-        for (var name in bundled.split(','))
+        for (var name in bundled.split(':'))
           name: PathPluginSource(
             path: path.join(
               path.dirname(path.dirname(platform.resolvedExecutable)),
