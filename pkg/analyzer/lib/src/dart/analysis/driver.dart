@@ -1675,7 +1675,7 @@ class AnalysisDriver {
     if (_pendingFileChanges.any(
       (change) => change.kind != FileChangeKind.add,
     )) {
-      if (_summaryCoordinator != null && _priorityFiles.isNotEmpty) {
+      if (_summaryCoordinator?.isActive == true && _priorityFiles.isNotEmpty) {
         // Consecutive edits can briefly drain the request queue. Reclaim
         // decoded manifests once the open document has actually been idle.
         _editorIdleTimer?.cancel();
@@ -1684,7 +1684,7 @@ class AnalysisDriver {
           _scheduler.notify();
         });
       }
-      if (_summaryCoordinator != null) {
+      if (_summaryCoordinator?.isActive == true) {
         _summaryGeneration++;
         _preparedPaths.clear();
         _changedSummaryFiles.addAll(_pendingFileChanges.map((c) => c.path));
@@ -2466,7 +2466,11 @@ class AnalysisDriver {
 
   bool _requestSummaries(String path, {required bool interactive}) {
     var coordinator = _summaryCoordinator;
-    if (coordinator == null || _preparedPaths.contains(path)) return false;
+    if (coordinator == null ||
+        !coordinator.isActive ||
+        _preparedPaths.contains(path)) {
+      return false;
+    }
     if (interactive || _priorityFiles.isNotEmpty) {
       var kind = _fsState.getFileForPath(path).kind;
       var result = libraryContext.loadForResolution(

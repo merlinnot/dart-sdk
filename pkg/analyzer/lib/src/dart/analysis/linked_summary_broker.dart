@@ -11,20 +11,28 @@ part of 'linked_summary_coordinator.dart';
 final class LinkedSummaryBroker extends LinkedSummaryCoordinator {
   final RawReceivePort _readers;
   final _ready = Completer<SendPort?>();
-  late final Future<void> _producerLifetime;
+  final String _sdk;
+  Future<void>? _producerLifetime;
   final _pendingReaders = <SendPort, bool>{};
 
   List<Object>? _latestProgress;
   bool _acceptingRequests = true;
   late final _shutdown = _stop();
 
-  factory(String sdk) =>
-      LinkedSummaryBroker._(RawReceivePort()..keepIsolateAlive = false, sdk);
+  factory(String sdk, {bool waitForPlugin = false}) => LinkedSummaryBroker._(
+    RawReceivePort()..keepIsolateAlive = false,
+    sdk,
+    waitForPlugin,
+  );
 
-  new _(this._readers, String sdk) : super._(_readers.sendPort, 'server') {
+  new _(this._readers, this._sdk, bool waitForPlugin)
+    : super._(_readers.sendPort, 'server') {
     _readers.handler = _onReaderMessage;
-    _producerLifetime = _runProducer(sdk);
+    if (!waitForPlugin) _producerLifetime = _runProducer(_sdk);
   }
+
+  @override
+  bool get isActive => _producerLifetime != null && _acceptingRequests;
 
   /// The port passed to plugins during startup.
   SendPort get sendPort => _readers.sendPort;
@@ -110,7 +118,9 @@ final class LinkedSummaryBroker extends LinkedSummaryCoordinator {
 
   void _onReaderMessage(Object? message) {
     switch (message) {
-      case ['invalidateRoot', String root]:
+      case LinkedSummaryCoordinator.capability when _acceptingRequests:
+        _producerLifetime ??= _runProducer(_sdk);
+      case ['invalidateRoot', String root] when isActive:
         unawaited(_invalidateRoot(root));
       case [SendPort reader]:
         _pendingReaders.remove(reader);
@@ -183,6 +193,7 @@ final class LinkedSummaryBroker extends LinkedSummaryCoordinator {
 
   Future<void> _stop() async {
     _acceptingRequests = false;
+    if (_producerLifetime == null) _disconnectReaders();
     // An awaiting CLI may have no other live ports during cleanup.
     _readers.keepIsolateAlive = true;
     try {

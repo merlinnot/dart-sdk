@@ -61,6 +61,8 @@ class LinkedSummaryCoordinator {
 
   /// Ends pending requests and releases this reader's reference to the arena.
   /// Previously returned bytes keep their mapping alive.
+  bool get isActive => !_closed;
+
   void close() {
     _closed = true;
     for (var port in _pending) {

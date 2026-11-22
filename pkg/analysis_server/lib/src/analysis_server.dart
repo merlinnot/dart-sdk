@@ -370,13 +370,12 @@ abstract class AnalysisServer {
       disableFileByteStore: options.disableFileByteStore ?? false,
       useSingleFileByteStore: options.useSingleFileByteStore,
     );
-    var serverEnvironment = environment ?? io.Platform.environment;
     if (LinkedSummaryCoordinator.isSupported &&
         _byteStore.usesFileByteStore &&
-        usePlugins != false &&
-        serverEnvironment['DART_ANALYZER_LINKED_SUMMARY_COORDINATOR'] == '1') {
+        usePlugins != false) {
       _linkedSummaryBroker = LinkedSummaryBroker(
         sdkManager.defaultSdkDirectory,
+        waitForPlugin: true,
       );
       pluginManager.linkedSummaryPort = _linkedSummaryBroker!.sendPort;
     }
