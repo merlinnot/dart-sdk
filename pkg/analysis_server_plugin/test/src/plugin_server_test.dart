@@ -37,6 +37,14 @@ void main() {
   group('summary capability negotiation', () {
     for (var (name, versions) in [
       ('absent offer', null),
+      if (!LinkedSummaryCoordinator.isSupported)
+        (
+          'unsupported reader',
+          [
+            LinkedSummaryCoordinator.protocolVersion,
+            AnalysisDriver.DATA_VERSION,
+          ],
+        ),
       (
         'incompatible protocol',
         [
@@ -65,6 +73,7 @@ void main() {
         );
         var host = ReceivePort();
         var broker = ReceivePort();
+        broker.listen(expectAsync1((_) {}, count: 0));
         var messages = StreamQueue(host);
         var channel = PluginIsolateChannel(host.sendPort);
         addTearDown(() async {

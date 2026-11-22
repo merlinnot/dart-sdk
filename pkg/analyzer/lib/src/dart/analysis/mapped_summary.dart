@@ -8,6 +8,9 @@ import 'package:analyzer/src/dart/analysis/mapped_summary_stub.dart'
     if (dart.library.ffi) 'package:analyzer/src/dart/analysis/mapped_summary/native.dart'
     as platform;
 
+/// Whether this runtime can map a shared summary file read-only.
+bool get supportsSummaryMapping => platform.supportsSummaryMapping;
+
 /// Maps the [length]-byte summary file at [path].
 ///
 /// The returned bytes and their subviews are read-only and keep the mapping

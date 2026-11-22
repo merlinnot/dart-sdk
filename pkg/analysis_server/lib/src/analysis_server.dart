@@ -372,7 +372,7 @@ abstract class AnalysisServer {
     );
     LinkedSummaryBroker? summaryBroker;
     var serverEnvironment = environment ?? io.Platform.environment;
-    if (io.Platform.isMacOS &&
+    if (LinkedSummaryCoordinator.isSupported &&
         _byteStore.usesFileByteStore &&
         usePlugins != false &&
         serverEnvironment['DART_ANALYZER_LINKED_SUMMARY_COORDINATOR'] == '1') {

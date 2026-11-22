@@ -4,5 +4,7 @@
 
 import 'dart:typed_data';
 
+const supportsSummaryMapping = false;
+
 Uint8List mapSummaryFile(String path, int length) =>
     throw UnsupportedError('Native summary mappings unavailable');

@@ -333,11 +333,13 @@ class PluginServer {
     // the SDK path is configured...
     _sdkPath = parameters.sdkPath;
     if (_channel case PluginIsolateChannel(:var startupCapabilities)) {
-      if (startupCapabilities?[LinkedSummaryCoordinator.capability] case [
-        LinkedSummaryCoordinator.protocolVersion,
-        AnalysisDriver.DATA_VERSION,
-        final SendPort port,
-      ]) {
+      if (startupCapabilities?[LinkedSummaryCoordinator.capability]
+          case [
+            LinkedSummaryCoordinator.protocolVersion,
+            AnalysisDriver.DATA_VERSION,
+            final SendPort port,
+          ]
+          when LinkedSummaryCoordinator.isSupported) {
         _linkedSummaryCoordinator ??= LinkedSummaryCoordinator(port);
       }
     }
