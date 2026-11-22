@@ -53,14 +53,14 @@ final class ServerIsolateChannel implements ServerCommunicationChannel {
   /// The port used to receive notification when the plugin isolate has exited.
   ReceivePort? _exitPort;
 
-  final SendPort? linkedSummaryPort;
+  final SendPort? Function()? connectSummaryReader;
 
   new(
     this._pluginUri,
     this._packageConfigUri,
     this.instrumentationService,
     this._sessionListener, {
-    this.linkedSummaryPort,
+    this.connectSummaryReader,
   });
 
   /// The ID of the plugin running in the isolate, used to identify the plugin
@@ -172,8 +172,11 @@ final class ServerIsolateChannel implements ServerCommunicationChannel {
         to: ProcessId.plugin,
         message: jsonData,
       );
-      if (linkedSummaryPort case var brokerPort?
-          when request.method == PLUGIN_REQUEST_VERSION_CHECK) {
+      var brokerPort = request.method == PLUGIN_REQUEST_VERSION_CHECK
+          ? connectSummaryReader?.call()
+          : null;
+
+      if (brokerPort != null) {
         sendPort.send({
           ...jsonData,
           LinkedSummaryCoordinator.capability: [
