@@ -54,7 +54,6 @@ import 'package:analyzer/src/fine/requirements.dart';
 import 'package:analyzer/src/generated/engine.dart'
     show AnalysisContext, AnalysisEngine;
 import 'package:analyzer/src/generated/source.dart' show SourceFactory;
-import 'package:analyzer/src/generated/utilities_collection.dart' show EnumSet;
 import 'package:analyzer/src/lint/registry.dart' as linter;
 import 'package:analyzer/src/summary/api_signature.dart';
 import 'package:analyzer/src/summary/format.dart';
@@ -326,7 +325,8 @@ class AnalysisDriver {
   LinkedSummaryCoordinator? _summaryCoordinator;
 
   // An editor request can run while a background batch is waiting.
-  var _pendingSummaryRequests = EnumSet<_SummaryRequestKind>.empty();
+  final _waitingForSummary = <String>{};
+  bool _waitingForBatch = false;
   Timer? _editorIdleTimer;
 
   // A file edit starts a new generation. Late replies belong to the old one.
@@ -525,17 +525,13 @@ class AnalysisDriver {
       return AnalysisDriverPriority.interactive;
     }
 
-    if (_pendingSummaryRequests[.singleFile]) {
-      return AnalysisDriverPriority.nothing;
-    }
-
-    if (_resolveForCompletionRequests.isNotEmpty) {
+    if (_nextCompletionRequest != null) {
       return AnalysisDriverPriority.completion;
     }
-    if (_requestedFiles.isNotEmpty) {
+    if (_runnablePath(_requestedFiles.keys) != null) {
       return AnalysisDriverPriority.interactive;
     }
-    if (_requestedLibraries.isNotEmpty) {
+    if (_runnablePath(_requestedLibraries.keys) != null) {
       return AnalysisDriverPriority.interactive;
     }
     if (_definingClassMemberNameRequests.isNotEmpty) {
@@ -544,27 +540,23 @@ class AnalysisDriver {
     if (_referencingNameRequests.isNotEmpty) {
       return AnalysisDriverPriority.interactive;
     }
-    if (_errorsRequestedFiles.isNotEmpty) {
+    if (_runnablePath(_errorsRequestedFiles.keys) != null) {
       return AnalysisDriverPriority.interactive;
     }
-    if (_indexRequestedFiles.isNotEmpty) {
+    if (_runnablePath(_indexRequestedFiles.keys) != null) {
       return AnalysisDriverPriority.interactive;
     }
-    if (_unitElementRequestedFiles.isNotEmpty) {
+    if (_runnablePath(_unitElementRequestedFiles.keys) != null) {
       return AnalysisDriverPriority.interactive;
     }
     if (_hasPendingAvailableFilesDiscovery) {
       return AnalysisDriverPriority.interactive;
     }
-    if (_priorityFiles.isNotEmpty) {
-      for (String path in _priorityFiles) {
-        if (_fileTracker.isFilePending(path)) {
-          return AnalysisDriverPriority.priority;
-        }
-      }
+    if (_nextPriorityFile != null) {
+      return AnalysisDriverPriority.priority;
     }
 
-    if (_requestedFilesNonInteractive.isNotEmpty) {
+    if (_runnablePath(_requestedFilesNonInteractive.keys) != null) {
       return AnalysisDriverPriority.general;
     }
     if (_pendingFileChanges.isNotEmpty) {
@@ -578,7 +570,8 @@ class AnalysisDriver {
       return AnalysisDriverPriority.general;
     }
 
-    if (_pendingSummaryRequests[.backgroundBatch]) {
+    if (_waitingForBatch ||
+        (_waitingForSummary.isNotEmpty && _nextBackgroundFile == null)) {
       return AnalysisDriverPriority.nothing;
     }
 
@@ -620,6 +613,19 @@ class AnalysisDriver {
   bool get _hasPendingAvailableFilesDiscovery {
     return _discoverAvailableFilesTask?.hasPendingWork ?? false;
   }
+
+  String? get _nextBackgroundFile =>
+      _runnablePath(_fileTracker.pendingFilesInAnalysisOrder);
+
+  _ResolveForCompletionRequest? get _nextCompletionRequest =>
+      _waitingForSummary.isEmpty
+      ? _resolveForCompletionRequests.lastOrNull
+      : _resolveForCompletionRequests.lastWhereOrNull(
+          (request) => !_waitingForSummary.contains(request.path),
+        );
+
+  String? get _nextPriorityFile =>
+      _runnablePath(_priorityFiles.where(_fileTracker.isFilePending));
 
   bool get _supportsSharedSummaries =>
       withFineDependencies &&
@@ -1276,13 +1282,12 @@ class AnalysisDriver {
     _discoverDartCore();
     _discoverLibraries();
 
-    if (_resolveForCompletionRequests.lastOrNull case var request?) {
-      if (_deferForSummaries(request.path, .singleFile)) {
-        return;
-      }
-
-      _resolveForCompletionRequests.removeLast();
+    if (_nextCompletionRequest case var request?) {
       try {
+        if (_deferForSummaries(request.path, .singleFile)) {
+          return;
+        }
+
         var result = _resolveForCompletion(request);
         request.completer.complete(result);
       } catch (exception, stackTrace) {
@@ -1291,27 +1296,37 @@ class AnalysisDriver {
         // Recover from a possibly inconsistent library context.
         clearLibraryContext();
       }
+      _resolveForCompletionRequests.remove(request);
       return;
     }
 
-    if (_handleFileRequest(_requestedFiles.firstKey, _analyzeFile)) {
-      return;
-    }
-
-    if (_handleFileRequest(_requestedLibraries.firstKey, _getResolvedLibrary)) {
-      return;
-    }
-
-    if (_handleFileRequest(_errorsRequestedFiles.firstKey, _getErrors)) {
-      return;
-    }
-
-    if (_handleFileRequest(_indexRequestedFiles.firstKey, _getIndex)) {
+    if (_handleFileRequest(_runnablePath(_requestedFiles.keys), _analyzeFile)) {
       return;
     }
 
     if (_handleFileRequest(
-      _unitElementRequestedFiles.firstKey,
+      _runnablePath(_requestedLibraries.keys),
+      _getResolvedLibrary,
+    )) {
+      return;
+    }
+
+    if (_handleFileRequest(
+      _runnablePath(_errorsRequestedFiles.keys),
+      _getErrors,
+    )) {
+      return;
+    }
+
+    if (_handleFileRequest(
+      _runnablePath(_indexRequestedFiles.keys),
+      _getIndex,
+    )) {
+      return;
+    }
+
+    if (_handleFileRequest(
+      _runnablePath(_unitElementRequestedFiles.keys),
       _getUnitElement,
     )) {
       return;
@@ -1338,10 +1353,7 @@ class AnalysisDriver {
     }
 
     // Analyze a priority file.
-    if (_handleFileRequest(
-      _priorityFiles.firstWhereOrNull(_fileTracker.isFilePending),
-      _analyzeFile,
-    )) {
+    if (_handleFileRequest(_nextPriorityFile, _analyzeFile)) {
       return;
     }
 
@@ -1350,9 +1362,9 @@ class AnalysisDriver {
       return;
     }
 
-    if (!_pendingSummaryRequests[.backgroundBatch] &&
+    if (!_waitingForBatch &&
         _handleFileRequest(
-          _fileTracker.pendingFilesInAnalysisOrder.firstOrNull,
+          _nextBackgroundFile,
           _produceErrors,
           kind: .backgroundBatch,
         )) {
@@ -1360,7 +1372,10 @@ class AnalysisDriver {
     }
 
     // Explicit non-interactive work runs after pending background files.
-    _handleFileRequest(_requestedFilesNonInteractive.firstKey, _analyzeFile);
+    _handleFileRequest(
+      _runnablePath(_requestedFilesNonInteractive.keys),
+      _analyzeFile,
+    );
   }
 
   /// Produces summaries for the library containing [path] and its dependencies.
@@ -1649,27 +1664,9 @@ class AnalysisDriver {
         );
         _reportException(path, exception, stackTrace, contextKey);
 
-        // Complete all related requests with an error.
-        void completeWithError<T>(List<Completer<T>>? completers) {
-          if (completers != null) {
-            for (var completer in completers) {
-              completer.completeError(exception, stackTrace);
-            }
-          }
-        }
-
-        // TODO(scheglov): write tests
         for (var file in library.files) {
-          // getResolvedUnit()
-          completeWithError(_requestedFiles.remove(file.path));
-          completeWithError(_requestedFilesNonInteractive.remove(file.path));
-          // getErrors()
-          completeWithError(_errorsRequestedFiles.remove(file.path));
-          // getIndex()
-          completeWithError(_indexRequestedFiles.remove(file.path));
+          _completeFileRequestsWithError(file.path, exception, stackTrace);
         }
-        // getResolvedLibrary()
-        completeWithError(_requestedLibraries.remove(library.file.path));
         // Recover from a possibly inconsistent library context.
         clearLibraryContext();
       }
@@ -1714,6 +1711,27 @@ class AnalysisDriver {
         completer.complete(accumulatedAffected.toList());
       }
     }
+  }
+
+  void _completeFileRequestsWithError(
+    String path,
+    Object exception,
+    StackTrace stackTrace,
+  ) {
+    _requestedFiles.completeAllWithError(path, exception, stackTrace);
+    _requestedFilesNonInteractive.completeAllWithError(
+      path,
+      exception,
+      stackTrace,
+    );
+    _requestedLibraries.completeAllWithError(path, exception, stackTrace);
+    _errorsRequestedFiles.completeAllWithError(path, exception, stackTrace);
+    _indexRequestedFiles.completeAllWithError(path, exception, stackTrace);
+    _unitElementRequestedFiles.completeAllWithError(
+      path,
+      exception,
+      stackTrace,
+    );
   }
 
   /// Completes pending requests if a required SDK library is missing.
@@ -1857,7 +1875,10 @@ class AnalysisDriver {
       if (kind == .backgroundBatch)
         ..._fileTracker.pendingFilesInAnalysisOrder
             .where(
-              (pending) => pending != path && !_preparedPaths.contains(pending),
+              (pending) =>
+                  pending != path &&
+                  !_waitingForSummary.contains(pending) &&
+                  !_preparedPaths.contains(pending),
             )
             .take(_backgroundSummaryBatchSize - 1),
     ];
@@ -1871,8 +1892,8 @@ class AnalysisDriver {
   /// of work of this driver.
   void _discardMemoryExpensiveDataOnIdle() {
     if (_hasDiscardedMemoryExpensiveData ||
-        _pendingSummaryRequests[.singleFile] ||
-        _pendingSummaryRequests[.backgroundBatch] ||
+        _waitingForSummary.isNotEmpty ||
+        _waitingForBatch ||
         _editorIdleTimer != null) {
       return;
     }
@@ -2262,10 +2283,19 @@ class AnalysisDriver {
       return false;
     }
 
-    if (!_deferForSummaries(path, kind)) {
-      perform(path);
+    try {
+      if (_deferForSummaries(path, kind)) {
+        return true;
+      }
+    } catch (exception, stackTrace) {
+      _reportException(path, exception, stackTrace, null);
+      _completeFileRequestsWithError(path, exception, stackTrace);
+      _fileTracker.fileWasAnalyzed(path);
+      clearLibraryContext();
+      return true;
     }
 
+    perform(path);
     return true;
   }
 
@@ -2346,7 +2376,11 @@ class AnalysisDriver {
     var generation = _summaryGeneration;
     var changedFiles = _changedSummaryFiles.toList();
     _changedSummaryFiles.clear();
-    _pendingSummaryRequests = _pendingSummaryRequests.updated(kind, true);
+    if (kind == .singleFile) {
+      _waitingForSummary.add(paths.single);
+    } else {
+      _waitingForBatch = true;
+    }
 
     void onAvailable(PublishedCycles published) {
       if (generation == _summaryGeneration) {
@@ -2371,7 +2405,11 @@ class AnalysisDriver {
       changedFiles: changedFiles,
       onAvailable: kind == .backgroundBatch ? onAvailable : null,
     );
-    _pendingSummaryRequests = _pendingSummaryRequests.updated(kind, false);
+    if (kind == .singleFile) {
+      _waitingForSummary.remove(paths.single);
+    } else {
+      _waitingForBatch = false;
+    }
 
     if (generation == _summaryGeneration) {
       _preparedPaths.addAll(paths);
@@ -2665,6 +2703,11 @@ class AnalysisDriver {
       );
     });
   }
+
+  /// Skips only paths whose interactive request is waiting on the producer.
+  String? _runnablePath(Iterable<String> paths) => _waitingForSummary.isEmpty
+      ? paths.firstOrNull
+      : paths.firstWhereOrNull((path) => !_waitingForSummary.contains(path));
 
   String? _storeExceptionContext(
     String path,
@@ -3633,5 +3676,11 @@ enum _SummaryRequestKind { singleFile, backgroundBatch }
 extension<K, V> on Map<K, List<Completer<V>>> {
   void completeAll(K key, V value) {
     remove(key)?.completeAll(value);
+  }
+
+  void completeAllWithError(K key, Object error, StackTrace stackTrace) {
+    for (var completer in remove(key) ?? <Completer<V>>[]) {
+      completer.completeError(error, stackTrace);
+    }
   }
 }
