@@ -70,6 +70,14 @@ class LinkedSummaryCoordinator {
     _index = null;
   }
 
+  /// Releases producer contexts for [root] after a client disposes its driver.
+  /// The broker handles this before later requests from the same client.
+  void invalidateRoot(String root) {
+    if (!_closed) {
+      _broker.send(['invalidateRoot', root]);
+    }
+  }
+
   /// Requests summaries for [paths] in the analysis context identified by
   /// [root], [options], [packages], and the declared [variables].
   ///

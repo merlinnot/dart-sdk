@@ -133,12 +133,17 @@ final class _SummaryProducer(
     // A broker can start and stop without ever requesting an arena.
     _SummaryProducer? producer;
     try {
-      await for (var request in inbox.cast<SummaryRequest?>()) {
-        if (request == null) {
-          break;
+      messages:
+      await for (var message in inbox) {
+        switch (message) {
+          case null:
+            break messages;
+          case (:String invalidatedRoot):
+            await producer?._contexts.invalidateRoot(invalidatedRoot);
+          case SummaryRequest request:
+            producer ??= _SummaryProducer(host, sdk, descriptor, clock);
+            await producer._produce(request);
         }
-        producer ??= _SummaryProducer(host, sdk, descriptor, clock);
-        await producer._produce(request);
       }
       await producer?._diskStore?.flush();
     } catch (error, stack) {
