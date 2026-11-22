@@ -111,6 +111,31 @@ void main() {
       );
     });
 
+    test('idle server shuts down without starting a producer', () async {
+      var broker = LinkedSummaryBroker('unused', waitForPlugin: true);
+      expect(broker.isActive, isFalse);
+      await broker.shutdown();
+    });
+    test('compatible plugin enables background production', () async {
+      var root = await Directory.systemTemp.createTemp('analyzer-handshake-');
+      var broker = LinkedSummaryBroker(
+        File(Platform.resolvedExecutable).parent.parent.path,
+        waitForPlugin: true,
+      );
+      try {
+        expect(broker.isActive, isFalse);
+        broker.sendPort.send(LinkedSummaryCoordinator.capability);
+        expect(
+          await broker.prepare(root: root.path, paths: []),
+          SummaryPreparationResult.prepared,
+        );
+        expect(broker.isActive, isTrue);
+      } finally {
+        await broker.shutdown();
+        await root.delete(recursive: true);
+      }
+    });
+
     test('rejects a missing file', () {
       expect(
         () => mapSummaryFile(file.path, 1),

@@ -339,6 +339,7 @@ class PluginServer {
         final SendPort port,
       ]) {
         _linkedSummaryCoordinator ??= LinkedSummaryCoordinator(port);
+        port.send(LinkedSummaryCoordinator.capability);
       }
     }
     return protocol.PluginVersionCheckResult(true, 'Plugin Server', '0.0.1', [
