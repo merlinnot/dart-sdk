@@ -38,8 +38,8 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
 
   /// Initialize a newly created analysis context manager.
   ///
-  /// Supply a fresh [analysisOptionsParseSession] to track the options files
-  /// read while locating roots and building their drivers.
+  /// Supply a fresh [analysisOptionsParseSession] to track the files that root
+  /// discovery and driver creation attempt to read when parsing options.
   new({
     AnalysisOptionsParseSession? analysisOptionsParseSession,
     ByteStore? byteStore,
