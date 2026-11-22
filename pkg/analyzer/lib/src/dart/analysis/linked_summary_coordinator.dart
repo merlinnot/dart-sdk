@@ -22,6 +22,9 @@ import 'package:path/path.dart' as path;
 part 'linked_summary_broker.dart';
 part 'linked_summary_producer.dart';
 
+const _invalidateRootMessage = 'invalidateRoot';
+const _progressMessage = 'progress';
+
 final _traceDirectory = Platform.environment['DART_ANALYZER_SUMMARY_TRACE_DIR'];
 
 void _writeTrace(String name, String contents) {
@@ -74,7 +77,7 @@ class LinkedSummaryCoordinator {
   /// The broker handles this before later requests from the same client.
   void invalidateRoot(String root) {
     if (!_closed) {
-      _broker.send(['invalidateRoot', root]);
+      _broker.send([_invalidateRootMessage, root]);
     }
   }
 
@@ -138,7 +141,7 @@ class LinkedSummaryCoordinator {
         }
 
         switch (message) {
-          case ['progress', [String directory, int length, int epoch]]
+          case [_progressMessage, [String directory, int length, int epoch]]
               when onAvailable != null:
             onAvailable(
               cycles((directory: directory, length: length, epoch: epoch)),
