@@ -31,16 +31,19 @@ class LinkedElementFactory {
   static final _dartAsyncUri = uriCache.parse('dart:async');
 
   final AnalysisContextImpl analysisContext;
-  AnalysisSessionImpl analysisSession;
+  final LibraryElementSession libraryElementSession;
   final RootReference rootReference;
   final Map<Uri, LibraryReader> _libraryReaders = {};
   bool isApplyingInformativeData = false;
   final Map<Uri, LibraryManifestHandle> libraryManifests = {};
 
-  new(this.analysisContext, this.analysisSession, this.rootReference) {
-    ArgumentError.checkNotNull(analysisContext, 'analysisContext');
-    ArgumentError.checkNotNull(analysisSession, 'analysisSession');
-  }
+  new(
+    this.analysisContext,
+    AnalysisSessionImpl analysisSession,
+    this.rootReference,
+  ) : libraryElementSession = LibraryElementSession(analysisSession);
+
+  AnalysisSessionImpl get analysisSession => libraryElementSession.current;
 
   LibraryElementImpl get dartAsyncElement {
     return libraryOfUri2(_dartAsyncUri);
@@ -143,7 +146,7 @@ class LinkedElementFactory {
 
   void dispose() {
     for (var libraryReference in rootReference.children) {
-      _disposeLibrary(libraryReference.element);
+      _detachLibraryFromSessionUpdates(libraryReference.element);
     }
   }
 
@@ -208,7 +211,7 @@ class LinkedElementFactory {
       _libraryReaders.remove(uri);
       libraryManifests.remove(uri);
       var libraryReference = rootReference.removeLibrary(uri);
-      _disposeLibrary(libraryReference?.element);
+      _detachLibraryFromSessionUpdates(libraryReference?.element);
     }
 
     analysisSession.classHierarchy.removeOfLibraries(uriSet);
@@ -238,13 +241,7 @@ class LinkedElementFactory {
   }
 
   void replaceAnalysisSession(AnalysisSessionImpl newSession) {
-    analysisSession = newSession;
-    for (var libraryReference in rootReference.children) {
-      var libraryElement = libraryReference.element;
-      if (libraryElement is LibraryElementImpl) {
-        libraryElement.session = newSession;
-      }
-    }
+    libraryElementSession.current = newSession;
   }
 
   void setLibraryTypeSystem(LibraryElementImpl libraryElement) {
@@ -277,7 +274,11 @@ class LinkedElementFactory {
     return libraryElement;
   }
 
-  void _disposeLibrary(ElementImpl? libraryElement) {}
+  void _detachLibraryFromSessionUpdates(ElementImpl? libraryElement) {
+    if (libraryElement is LibraryElementImpl) {
+      libraryElement.detachFromSessionUpdates();
+    }
+  }
 
   Never _reportMissingLibrary(Uri uri) {
     var rootChildren = rootReference.children.map((e) => e.uriString).toList();

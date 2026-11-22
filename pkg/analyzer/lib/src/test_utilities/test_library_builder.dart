@@ -530,7 +530,7 @@ class _LibraryDeclaration {
 
     element = LibraryElementImpl(
       builder.analysisContext,
-      builder.analysisSession,
+      LibraryElementSession(builder.analysisSession),
       libraryUriStr.replaceAll(':', '.'),
       0,
       0,

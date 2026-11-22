@@ -113,9 +113,6 @@ class LibraryReader {
   });
 
   LibraryElementImpl readElement({required Source librarySource}) {
-    var analysisContext = _elementFactory.analysisContext;
-    var analysisSession = _elementFactory.analysisSession;
-
     _reader.offset = _offset;
 
     // Read enough data to create the library.
@@ -124,8 +121,8 @@ class LibraryReader {
 
     // Create the library, link to the reference.
     _libraryElement = LibraryElementImpl(
-      analysisContext,
-      analysisSession,
+      _elementFactory.analysisContext,
+      _elementFactory.libraryElementSession,
       name,
       -1,
       0,
