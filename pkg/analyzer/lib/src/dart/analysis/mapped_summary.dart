@@ -2,104 +2,16 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-import 'dart:ffi';
-import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:ffi/ffi.dart';
+import 'package:analyzer/src/dart/analysis/mapped_summary_stub.dart'
+    if (dart.library.ffi) 'package:analyzer/src/dart/analysis/mapped_summary/native.dart'
+    as platform;
 
-final _close = _libSystem
-    .lookupFunction<Int32 Function(Int32), int Function(int)>('close');
-final _dispatchDataCreate = _libSystem
-    .lookupFunction<
-      Pointer<Void> Function(Pointer<Void>, Size, Pointer<Void>, Pointer<Void>),
-      Pointer<Void> Function(Pointer<Void>, int, Pointer<Void>, Pointer<Void>)
-    >('dispatch_data_create');
-final _dispatchRelease = _libSystem.lookup<NativeFinalizerFunction>(
-  'dispatch_release',
-);
-final _libSystem = DynamicLibrary.open('/usr/lib/libSystem.B.dylib');
-final _lseek = _libSystem
-    .lookupFunction<
-      Int64 Function(Int32, Int64, Int32),
-      int Function(int, int, int)
-    >('lseek');
-final _mmap = _libSystem
-    .lookupFunction<
-      Pointer<Void> Function(Pointer<Void>, Size, Int32, Int32, Int32, Int64),
-      Pointer<Void> Function(Pointer<Void>, int, int, int, int, int)
-    >('mmap');
-final _munmap = _libSystem
-    .lookupFunction<
-      Int32 Function(Pointer<Void>, Size),
-      int Function(Pointer<Void>, int)
-    >('munmap');
-final _open = _libSystem
-    .lookupFunction<
-      Int32 Function(Pointer<Utf8>, Int32, VarArgs<()>),
-      int Function(Pointer<Utf8>, int)
-    >('open');
-final _unmapDestructor = _libSystem
-    .lookup<Pointer<Void>>('_dispatch_data_destructor_munmap')
-    .value;
-
-/// Maps the [length]-byte summary file at [path] on macOS.
+/// Maps the [length]-byte summary file at [path].
 ///
-/// The returned bytes and their subviews are read-only. They keep the mapping
-/// alive even after the file is deleted.
-Uint8List mapSummaryFile(String path, int length) {
-  if (length <= 0) {
-    throw ArgumentError.value(length, 'length');
-  }
-
-  // Resolve the dispatch bindings before acquiring a mapping to clean up.
-  var createDispatchData = _dispatchDataCreate;
-  var releaseDispatchData = _dispatchRelease;
-  var unmapDestructor = _unmapDestructor;
-  var address = _mapReadOnlyFile(path, length);
-  var owner = createDispatchData(address, length, nullptr, unmapDestructor);
-
-  if (owner == nullptr) {
-    _munmap(address, length);
-    throw StateError('Could not own summary mapping');
-  }
-
-  // The typed data owns the dispatch object from here. Its finalizer
-  // releases the object, which runs the destructor that unmaps the file.
-  return address
-      .cast<Uint8>()
-      .asTypedList(length, finalizer: releaseDispatchData, token: owner)
-      .asUnmodifiableView();
-}
-
-/// Returns a shared mapping of the file. The caller owns the mapping.
-Pointer<Void> _mapReadOnlyFile(String path, int length) {
-  const openReadOnly = 0;
-  const seekEnd = 2;
-  const protectRead = 1;
-  const mapShared = 1;
-  var descriptor = using(
-    (arena) => _open(path.toNativeUtf8(allocator: arena), openReadOnly),
-  );
-
-  if (descriptor < 0) {
-    throw FileSystemException('Could not open summary batch', path);
-  }
-
-  try {
-    if (_lseek(descriptor, 0, seekEnd) != length) {
-      throw FileSystemException('Summary batch length mismatch', path);
-    }
-
-    var address = _mmap(nullptr, length, protectRead, mapShared, descriptor, 0);
-
-    // mmap reports failure with MAP_FAILED, the pointer value -1.
-    if (address == Pointer<Void>.fromAddress(-1)) {
-      throw FileSystemException('Could not map summary batch', path);
-    }
-
-    return address;
-  } finally {
-    _close(descriptor);
-  }
-}
+/// The returned bytes and their subviews are read-only and keep the mapping
+/// alive after the file is deleted. Throws [UnsupportedError] on platforms
+/// without a summary mapping implementation.
+Uint8List mapSummaryFile(String path, int length) =>
+    platform.mapSummaryFile(path, length);

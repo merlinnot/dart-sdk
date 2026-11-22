@@ -11,6 +11,17 @@ import 'package:analyzer/src/dart/analysis/summary_arena.dart';
 import 'package:test/test.dart';
 
 void main() {
+  if (!Platform.isMacOS) {
+    test(
+      'reports unsupported summary mappings on ${Platform.operatingSystem}',
+      () {
+        expect(() => mapSummaryFile('unused', 1), throwsUnsupportedError);
+      },
+    );
+
+    return;
+  }
+
   group('mapped summary transport', () {
     late Directory directory;
     late File file;
@@ -70,5 +81,5 @@ void main() {
         writer.close();
       }
     });
-  }, skip: !Platform.isMacOS);
+  });
 }
