@@ -2,6 +2,7 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
@@ -10,6 +11,7 @@ import 'package:analyzer/src/dart/analysis/analysis_context_collection.dart';
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
 import 'package:analyzer/src/dart/analysis/linked_summary_contexts.dart';
 import 'package:analyzer/src/dart/analysis/linked_summary_protocol.dart';
+import 'package:analyzer/src/workspace/blaze.dart';
 import 'package:analyzer/src/workspace/pub.dart';
 import 'package:test/test.dart';
 
@@ -27,11 +29,12 @@ void main() {
     List<String> changed = const [],
     Map<String, String> overlays = const {},
     String? options,
+    String? root,
   }) async {
     var result = await contexts.prepare(
       SummaryRequest(
         scope: SummaryAnalysisScope(
-          directory.path,
+          root ?? directory.path,
           variables: {'mode': mode},
           options: options,
         ),
@@ -215,6 +218,101 @@ void main() {
         refreshed.contextFor(nested.path).contextRoot.root.path,
         nested.parent.path,
       );
+    },
+  );
+
+  test(
+    'a missing Blaze marker above the scope can appear and disappear',
+    () async {
+      entry = file('app/src/entry.dart')..createSync(recursive: true);
+      var root = entry.parent.path;
+      Future<bool> usesBlaze([List<String> changed = const []]) async {
+        var collection = await prepare('disk', root: root, changed: changed);
+
+        return collection.contextFor(entry.path).contextRoot.workspace
+            is BlazeWorkspace;
+      }
+
+      expect(await usesBlaze(), isFalse);
+      var marker = file('app/dart/config/ide/flutter.json')
+        ..createSync(recursive: true);
+      expect(await usesBlaze([marker.path]), isTrue);
+      marker.deleteSync();
+      expect(await usesBlaze([marker.path]), isFalse);
+    },
+  );
+
+  test(
+    'an external embedder mapping refreshes dart library resolution',
+    () async {
+      entry = file('app/entry.dart')..createSync(recursive: true);
+      var sky = directory.uri.resolve('sky_engine/');
+      file('app/.dart_tool/package_config.json')
+        ..createSync(recursive: true)
+        ..writeAsStringSync(
+          jsonEncode({
+            'configVersion': 2,
+            'packages': [
+              {
+                'name': 'sky_engine',
+                'rootUri': sky.toString(),
+                'packageUri': 'lib/',
+                'languageVersion': '3.0',
+              },
+            ],
+          }),
+        );
+      var first = file('sky_engine/lib/first.dart')
+        ..createSync(recursive: true);
+      var second = file('sky_engine/lib/second.dart')..createSync();
+      var mapping = file('sky_engine/lib/_embedder.yaml');
+      Future<String?> core([List<String> changed = const []]) async {
+        var collection = await prepare(
+          'disk',
+          root: entry.parent.path,
+          changed: changed,
+        );
+
+        return collection
+            .contextFor(entry.path)
+            .driver
+            .sourceFactory
+            .forUri('dart:core')
+            ?.fullName;
+      }
+
+      var original = await core();
+      mapping.writeAsStringSync('embedded_libs:\n  "dart:core": "first.dart"');
+      expect(await core([mapping.path]), first.path);
+      mapping.writeAsStringSync('embedded_libs:\n  "dart:core": "second.dart"');
+      expect(await core([mapping.path]), second.path);
+      mapping.deleteSync();
+      expect(await core([mapping.path]), original);
+    },
+  );
+
+  test(
+    'invalidating a root discards its scopes and preserves other roots',
+    () async {
+      var root = file('project/entry.dart')..createSync(recursive: true);
+      var first = await prepare('first', root: root.parent.path);
+      var second = await prepare('second', root: root.parent.path);
+      var other = await prepare('other');
+      file('project/analysis_options.yaml')
+          .writeAsStringSync('analyzer:\n  exclude: [entry.dart]');
+
+      await contexts.invalidateRoot(root.parent.path);
+      var refreshed = await prepare('first', root: root.parent.path);
+      expect(refreshed, isNot(same(first)));
+      expect(
+        refreshed.contexts.any((c) => c.contextRoot.isAnalyzed(root.path)),
+        isFalse,
+      );
+      expect(
+        await prepare('second', root: root.parent.path),
+        isNot(same(second)),
+      );
+      expect(await prepare('other'), same(other));
     },
   );
 
