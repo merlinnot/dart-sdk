@@ -76,6 +76,7 @@ import 'package:analyzer/src/dart/analysis/driver.dart' as analysis;
 import 'package:analyzer/src/dart/analysis/driver.dart';
 import 'package:analyzer/src/dart/analysis/file_content_cache.dart';
 import 'package:analyzer/src/dart/analysis/library_graph.dart';
+import 'package:analyzer/src/dart/analysis/linked_summary_coordinator.dart';
 import 'package:analyzer/src/dart/analysis/performance_logger.dart';
 import 'package:analyzer/src/dart/analysis/results.dart';
 import 'package:analyzer/src/dart/analysis/session.dart';
@@ -171,6 +172,7 @@ abstract class AnalysisServer {
   late final SearchEngine searchEngine = SearchEngineImpl(driverMap.values);
 
   late final ServerByteStore _byteStore;
+  PluginSummarySessions? _summarySessions;
 
   final UnlinkedUnitStore unlinkedUnitStore = UnlinkedUnitStoreImpl();
 
@@ -368,10 +370,21 @@ abstract class AnalysisServer {
       disableFileByteStore: options.disableFileByteStore ?? false,
       useSingleFileByteStore: options.useSingleFileByteStore,
     );
+    LinkedSummaryBroker? summaryBroker;
+    var serverEnvironment = environment ?? io.Platform.environment;
+    if (LinkedSummaryCoordinator.isSupported &&
+        _byteStore.usesFileByteStore &&
+        usePlugins != false &&
+        serverEnvironment['DART_ANALYZER_LINKED_SUMMARY_COORDINATOR'] == '1') {
+      summaryBroker = LinkedSummaryBroker(sdkManager.defaultSdkDirectory);
+      _summarySessions = PluginSummarySessions(summaryBroker);
+      pluginManager.summarySessions = _summarySessions;
+    }
 
     analysisDriverScheduler = analysis.AnalysisDriverScheduler(
       analysisPerformanceLogger,
       driverWatcher: pluginWatcher,
+      linkedSummaryCoordinator: summaryBroker,
     );
 
     contextManager = ContextManagerImpl(
@@ -1304,7 +1317,11 @@ abstract class AnalysisServer {
 
     pubPackageService.shutdown();
     surveyManager?.shutdown();
-    await contextManager.dispose();
+    try {
+      await contextManager.dispose();
+    } finally {
+      await _summarySessions?.shutdown();
+    }
     await _byteStore.shutdown();
     await analyticsManager.shutdown();
     await shutdownPerfWitness();
@@ -1572,15 +1589,6 @@ class ServerRecentPerformance {
 extension on OverlayResourceProvider {
   /// The path to the location of the byte store on disk, or `null` if there is
   /// no on-disk byte store.
-  String? get byteStorePath {
-    var provider = baseProvider;
-    var physicalProvider = provider is TimingResourceProvider
-        ? provider.baseProvider
-        : provider;
-    if (physicalProvider is PhysicalResourceProvider) {
-      var stateLocation = provider.getStateLocation('.analysis-driver');
-      return stateLocation?.path;
-    }
-    return null;
-  }
+  String? get byteStorePath =>
+      physicalStateProvider?.getStateLocation('.analysis-driver')?.path;
 }

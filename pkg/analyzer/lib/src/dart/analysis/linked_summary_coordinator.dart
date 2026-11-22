@@ -50,6 +50,9 @@ class LinkedSummaryCoordinator {
 
   static const _producerIdleTimeout = Duration(seconds: 20);
 
+  /// Whether this runtime can read the producer's shared summary arena.
+  static bool get isSupported => supportsSummaryMapping;
+
   final SendPort _broker;
   final _pending = <ReceivePort>{};
   final _ReaderStats _stats;
