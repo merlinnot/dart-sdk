@@ -80,6 +80,14 @@ final class LinkedSummaryBroker extends LinkedSummaryCoordinator {
     producer.send(request);
   }
 
+  Future<void> _invalidateRoot(String root) async {
+    var producer = await _ready.future;
+
+    if (_acceptingRequests) {
+      producer?.send((invalidatedRoot: root));
+    }
+  }
+
   void _onProducerEvent(Object? event) {
     switch (event) {
       case SendPort producer:
@@ -102,6 +110,8 @@ final class LinkedSummaryBroker extends LinkedSummaryCoordinator {
 
   void _onReaderMessage(Object? message) {
     switch (message) {
+      case ['invalidateRoot', String root]:
+        unawaited(_invalidateRoot(root));
       case [SendPort reader]:
         _pendingReaders.remove(reader);
       case [..., SendPort reader]:

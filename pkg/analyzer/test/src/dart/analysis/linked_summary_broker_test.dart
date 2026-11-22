@@ -123,6 +123,27 @@ void main() {
         },
       );
 
+      test(
+        'a replacement reader sees configuration changed during a host rebuild',
+        () async {
+          var entry = writeLibrary('entry', 'class Entry {}');
+          var options = File('${directory.path}/analysis_options.yaml')
+            ..writeAsStringSync('analyzer: {}');
+          Future<SummaryPreparationResult> request(
+            LinkedSummaryCoordinator reader,
+          ) => reader.prepare(root: directory.path, paths: [entry]);
+
+          expect(await request(plugin), SummaryPreparationResult.prepared);
+          options.writeAsStringSync('analyzer:\n  exclude: [entry.dart]');
+          broker.invalidateRoot(directory.path);
+          expect(await request(plugin), SummaryPreparationResult.unavailable);
+
+          options.writeAsStringSync('analyzer: {}');
+          plugin.invalidateRoot(directory.path);
+          expect(await request(broker), SummaryPreparationResult.prepared);
+        },
+      );
+
       for (var source in ['discovered', 'explicit', 'included']) {
         test('editing $source analysis options updates exclusions', () async {
           var entry = writeLibrary('entry', 'class Entry {}');
