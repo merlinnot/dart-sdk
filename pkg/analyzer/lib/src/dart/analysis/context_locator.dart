@@ -41,6 +41,8 @@ import 'package:path/path.dart';
 /// to the package config file that should be used in place of the one that
 /// would be found by looking in the directories containing the context roots.
 List<ContextRootImpl> locateContextRoots({
+  void Function(String path)? onConfigurationDependency,
+  AnalysisOptionsParseSession? analysisOptionsParseSession,
   required List<String> includedPaths,
   List<String> excludedPaths = const [],
   String? optionsFile,
@@ -83,6 +85,9 @@ List<ContextRootImpl> locateContextRoots({
       .toList();
 
   return _ContextLocator(
+    onConfigurationDependency: onConfigurationDependency,
+    analysisOptionsParseSession:
+        analysisOptionsParseSession ?? AnalysisOptionsParseSession(),
     resourceProvider: resourceProvider,
     defaultOptionsFile: defaultOptionsFile,
     defaultPackageConfigFile: defaultPackageConfigFile,
@@ -132,6 +137,7 @@ class _ContextLocator {
   final ResourceProvider _resourceProvider;
 
   final File? _defaultOptionsFile;
+  final void Function(String path)? _onConfigurationDependency;
 
   final File? _defaultPackageConfigFile;
 
@@ -146,7 +152,7 @@ class _ContextLocator {
   final Set<Resource> _excludedByClient;
 
   /// A parse session for one context-location operation.
-  final AnalysisOptionsParseSession _analysisOptionsParseSession = .new();
+  final AnalysisOptionsParseSession _analysisOptionsParseSession;
 
   /// Cache of enabled legacy plugin names by source factory and options file.
   ///
@@ -169,6 +175,8 @@ class _ContextLocator {
   /// resource provider will be used.
   new({
     required ResourceProvider? resourceProvider,
+    required this._analysisOptionsParseSession,
+    required this._onConfigurationDependency,
     required this._defaultOptionsFile,
     required this._defaultPackageConfigFile,
     required this._excludedByClient,
@@ -542,6 +550,7 @@ class _ContextLocator {
         _resourceProvider,
         rootPath,
         lookForBuildFileSubstitutes: false,
+        onConfigurationDependency: _onConfigurationDependency,
       ),
       _packageConfigWorkspaceFindSession.find(
         rootPath,

@@ -173,12 +173,6 @@ abstract class FileKind {
     disposeLibraryCycle();
   }
 
-  /// When [library] returns `null`, this getter is used to look at this
-  /// file itself as a library.
-  LibraryFileKind get asLibrary {
-    return LibraryFileKind(file: file, name: null, recoveredFrom: this);
-  }
-
   /// The import states of each `@docImport` on the library directive or
   /// part-of directive.
   List<LibraryImportState> get docLibraryImports {
@@ -235,6 +229,10 @@ abstract class FileKind {
       }
     }).toFixedList();
   }
+
+  /// The containing library, or a recovery library for an unowned part.
+  LibraryFileKind get libraryForAnalysis =>
+      library ?? LibraryFileKind(file: file, name: null, recoveredFrom: this);
 
   List<LibraryImportState> get libraryImports {
     if (_libraryImports case var existing?) {
@@ -1880,7 +1878,7 @@ class LibraryFileKind extends LibraryOrAugmentationFileKind {
   /// Or `null` if no `library` directive.
   final String? name;
 
-  /// The [FileKind] that created this object in [FileKind.asLibrary].
+  /// The [FileKind] that created this object in [FileKind.libraryForAnalysis].
   final FileKind? recoveredFrom;
 
   /// The cache for [apiSignature].
@@ -1932,7 +1930,7 @@ class LibraryFileKind extends LibraryOrAugmentationFileKind {
   /// - the part files, in the depth-first pre-order order.
   ///
   /// Each file is visited once, so cycles of parts, e.g. a part file that
-  /// includes itself, which can happen when [asLibrary] is used, terminate.
+  /// includes itself, which can happen when [libraryForAnalysis] is used, terminate.
   List<FileKind> get fileKinds {
     var result = <FileKind>[];
     var visited = <FileState>{};
@@ -1968,17 +1966,23 @@ class LibraryFileKind extends LibraryOrAugmentationFileKind {
 
   /// Return the [LibraryCycle] this file belongs to, even if it consists of
   /// just this file.  If the library cycle is not known yet, compute it.
-  LibraryCycle get libraryCycle {
-    if (_libraryCycle == null) {
-      file._fsState._libraryCycleComputer.compute(this);
-    }
-
-    return _libraryCycle!;
-  }
+  LibraryCycle get libraryCycle => computeLibraryCycle();
 
   @override
   List<UnlinkedLibraryImportDirective> get _unlinkedDocImports {
     return file.unlinked2.libraryDirective?.docImports ?? const [];
+  }
+
+  /// Returns this library's cycle, computing it on first access.
+  ///
+  /// Calls [onComputed] for newly discovered cycles in dependency order.
+  /// An already computed cycle is returned without a callback.
+  LibraryCycle computeLibraryCycle({void Function(LibraryCycle)? onComputed}) {
+    if (_libraryCycle == null) {
+      file._fsState._libraryCycleComputer.compute(this, onComputed: onComputed);
+    }
+
+    return _libraryCycle!;
   }
 
   @override

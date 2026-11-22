@@ -9,6 +9,7 @@
 
 #include "bin/builtin.h"
 #include "bin/dartutils.h"
+#include "bin/file.h"
 #include "bin/file_system_watcher.h"
 #include "bin/socket_base.h"
 #include "include/dart_api.h"
@@ -208,6 +209,8 @@ namespace bin {
 
 #if defined(DART_HOST_OS_MACOS) || defined(DART_HOST_OS_WINDOWS)
 #define IO_FFI_NATIVE_LIST(V) V(FileSystemWatcher::DestroyWatch)
+#elif defined(DART_HOST_OS_LINUX)
+#define IO_FFI_NATIVE_LIST(V) V(File::MapReadOnlyShared)
 #else
 #define IO_FFI_NATIVE_LIST(V)
 #endif

@@ -23,6 +23,7 @@ base class _NamespaceImpl extends NativeFieldWrapperClass1
     _cachedNamespace = _create(_NamespaceImpl._(), namespace);
   }
 
+  @pragma("vm:entry-point", "get")
   static _NamespaceImpl get _namespace {
     if (_cachedNamespace == null) {
       // The embedder has not supplied a namespace before one is needed, so

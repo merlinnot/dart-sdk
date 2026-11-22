@@ -2,13 +2,20 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'dart:async';
 import 'dart:io' as io;
+import 'dart:isolate';
 
 import 'package:analysis_server/src/plugin/plugin_isolate.dart';
+import 'package:analysis_server/src/plugin/server_isolate_channel.dart';
+import 'package:analysis_server/src/plugin2/generator.dart';
 import 'package:analysis_server/src/session_logger/session_logger.dart';
 import 'package:analyzer/file_system/file_system.dart';
+import 'package:analyzer/instrumentation/instrumentation.dart';
 import 'package:analyzer/src/context/packages.dart';
 import 'package:analyzer/src/dart/analysis/context_root.dart';
+import 'package:analyzer/src/dart/analysis/linked_summary_coordinator.dart';
+import 'package:analyzer/src/dart/analysis/linked_summary_protocol.dart';
 import 'package:analyzer/src/workspace/basic.dart';
 import 'package:analyzer_plugin/channel/channel.dart';
 import 'package:analyzer_plugin/protocol/protocol.dart';
@@ -22,6 +29,7 @@ import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../../mocks.dart';
+import '../../support/sdk_paths.dart';
 import 'plugin_test_support.dart';
 
 void main() {
@@ -278,6 +286,78 @@ class PluginSessionFromDiskTest extends PluginTestSupport {
       },
     );
   }
+
+  Future<void> test_summaryOfferReachesThePluginDriver() async {
+    await withPlugin(
+      content: PluginPackageGenerator(configurations: []).generateEntrypoint(),
+      test: (pluginPath) async {
+        var root = io.Directory(path.join(pluginPath, 'project'))..createSync();
+        var entry = io.File(path.join(root.path, 'entry.dart'))
+          ..writeAsStringSync('class Entry {}');
+        var requested = <String>[];
+        var broker = ReceivePort();
+        broker.listen((message) {
+          if (message is List<Object?>) {
+            var request = SummaryRequest.tryDecode(message);
+            if (request != null) {
+              requested.addAll(request.paths);
+              request.reply.send(null);
+            }
+          }
+        });
+
+        var channel = ServerIsolateChannel(
+          Uri.file(path.join(pluginPath, 'bin', 'plugin.dart')),
+          Uri.file(sdkPackageConfigPath),
+          InstrumentationService.NULL_SERVICE,
+          SessionLogger(),
+          connectSummaryReader: () => broker.sendPort,
+        );
+        var diagnostics = Completer<AnalysisErrorsParams>();
+        var responses = StreamController<Response>.broadcast();
+        Future<Response> send(Request request) {
+          var response = responses.stream.firstWhere((r) => r.id == request.id);
+          channel.sendRequest(request);
+          return response;
+        }
+
+        try {
+          await channel.listen(responses.add, (notification) {
+            if (notification.event == 'analysis.errors') {
+              var errors = AnalysisErrorsParams.fromNotification(notification);
+              if (errors.file == entry.path && !diagnostics.isCompleted) {
+                diagnostics.complete(errors);
+              }
+            }
+          });
+          var sdk = io.File(io.Platform.resolvedExecutable).parent.parent.path;
+          var version = await send(
+            PluginVersionCheckParams(
+              pluginPath,
+              sdk,
+              '1.0.0',
+            ).toRequest('version'),
+          );
+          expect(
+            PluginVersionCheckResult.fromResponse(version).isCompatible,
+            isTrue,
+          );
+          var roots = await send(
+            AnalysisSetAnalysisRootsParams([root.path], []).toRequest('roots'),
+          );
+          expect(roots.error, isNull);
+          expect((await diagnostics.future).errors, isEmpty);
+          expect(requested, contains(entry.path));
+          await send(PluginShutdownParams().toRequest('shutdown'));
+        } finally {
+          channel.kill();
+          channel.close();
+          broker.close();
+          await responses.close();
+        }
+      },
+    );
+  }
 }
 
 @reflectiveTest
@@ -419,6 +499,61 @@ class PluginSessionTest with ResourceProviderMixin {
     expect(channel.sentRequests, hasLength(1));
     expect(channel.sentRequests[0].method, 'plugin.shutdown');
   }
+
+  Future<void> test_summaryReadersExitBeforeBrokerShutdown() async {
+    var directory = await io.Directory.systemTemp.createTemp();
+    var broker = LinkedSummaryBroker(
+      io.File(io.Platform.resolvedExecutable).parent.parent.path,
+    );
+    var sessions = PluginSummarySessions(broker);
+    var channel = TestServerCommunicationChannel(
+      session,
+      exitOnShutdown: false,
+    );
+    var reader = LinkedSummaryCoordinator(sessions.connect(session)!);
+    var stopping = PluginSession(pluginIsolate);
+    var stoppingChannel = TestServerCommunicationChannel(
+      stopping,
+      exitOnShutdown: false,
+    );
+    sessions.connect(stopping);
+    try {
+      // Root removal has already requested shutdown of the other session.
+      var alreadyStopping = stopping.stop();
+      var shutdown = sessions.shutdown();
+      expect(sessions.connect(PluginSession(pluginIsolate)), isNull);
+      expect(channel.sentRequests.single.method, 'plugin.shutdown');
+      expect(stoppingChannel.sentRequests.single.method, 'plugin.shutdown');
+      stopping.handleOnDone();
+      await alreadyStopping;
+
+      if (LinkedSummaryCoordinator.isSupported) {
+        var entry = io.File.fromUri(directory.uri.resolve('entry.dart'))
+          ..writeAsStringSync('class Entry {}');
+        var result = await reader
+            .prepare(root: directory.path, paths: [entry.path])
+            .timeout(const Duration(seconds: 10));
+        expect(result, SummaryPreparationResult.prepared);
+      }
+
+      reader.close();
+      session.handleOnDone();
+      await shutdown;
+      expect(
+        await broker.prepare(root: directory.path, paths: []),
+        SummaryPreparationResult.unavailable,
+      );
+    } finally {
+      reader.close();
+      for (var pending in [stopping, session]) {
+        if (!pending.pluginStoppedCompleter.isCompleted) {
+          pending.handleOnDone();
+        }
+      }
+      await sessions.shutdown();
+      await directory.delete(recursive: true);
+    }
+  }
 }
 
 class TestServerCommunicationChannel implements ServerCommunicationChannel {
@@ -426,7 +561,9 @@ class TestServerCommunicationChannel implements ServerCommunicationChannel {
   int closeCount = 0;
   List<Request> sentRequests = <Request>[];
 
-  new(this.session) {
+  final bool exitOnShutdown;
+
+  new(this.session, {this.exitOnShutdown = true}) {
     session.channel = this;
   }
 
@@ -453,7 +590,7 @@ class TestServerCommunicationChannel implements ServerCommunicationChannel {
   @override
   void sendRequest(Request request) {
     sentRequests.add(request);
-    if (request.method == 'plugin.shutdown') {
+    if (exitOnShutdown && request.method == 'plugin.shutdown') {
       session.handleOnDone();
     }
   }

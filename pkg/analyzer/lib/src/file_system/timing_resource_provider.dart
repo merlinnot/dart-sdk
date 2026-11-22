@@ -5,6 +5,8 @@
 import 'dart:typed_data';
 
 import 'package:analyzer/file_system/file_system.dart';
+import 'package:analyzer/file_system/overlay_file_system.dart';
+import 'package:analyzer/file_system/physical_file_system.dart';
 import 'package:path/path.dart' as pathos;
 
 /// A resource-provider operation measured by [TimingResourceProvider].
@@ -385,4 +387,22 @@ abstract class _TimingResource implements Resource {
 
   Folder _unwrap(Folder folder) =>
       folder is _TimingFolder ? folder._folder : folder;
+}
+
+extension ResourceProviderBacking on ResourceProvider {
+  /// The on-disk provider beneath any editor overlays, retaining its I/O timer.
+  ResourceProvider? get physicalStateProvider {
+    var provider = switch (this) {
+      OverlayResourceProvider(:var baseProvider) => baseProvider,
+      _ => this,
+    };
+
+    return switch (provider) {
+      PhysicalResourceProvider() ||
+      TimingResourceProvider(
+        baseProvider: PhysicalResourceProvider(),
+      ) => provider,
+      _ => null,
+    };
+  }
 }

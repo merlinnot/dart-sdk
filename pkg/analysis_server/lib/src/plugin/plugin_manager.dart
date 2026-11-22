@@ -82,6 +82,8 @@ class PluginManager {
   /// The console environment key used by the pub tool.
   static const String _pubEnvironmentKey = 'PUB_ENVIRONMENT';
 
+  PluginSummarySessions? summarySessions;
+
   /// The resource provider used to access the file system.
   final ResourceProvider _resourceProvider;
 
@@ -237,6 +239,7 @@ class PluginManager {
         _notificationManager,
         sessionListener,
         isLegacy: isLegacyPlugin,
+        summarySessions: isLegacyPlugin ? null : summarySessions,
       );
       try {
         sessionListener.logInfo('Starting plugin "$pluginIsolate"');

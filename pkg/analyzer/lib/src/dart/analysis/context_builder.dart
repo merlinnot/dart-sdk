@@ -41,6 +41,8 @@ class ContextBuilderImpl {
   /// The resource provider used to access the file system.
   final ResourceProvider resourceProvider;
 
+  final void Function(String path)? _onConfigurationDependency;
+
   /// Analysis options mappings shared by all contexts built by this builder.
   final AnalysisOptionsMap _optionsMap = AnalysisOptionsMap();
 
@@ -50,7 +52,7 @@ class ContextBuilderImpl {
   /// Initialize a newly created context builder. If a [resourceProvider] is
   /// given, then it will be used to access the file system, otherwise the
   /// default resource provider will be used.
-  new({ResourceProvider? resourceProvider})
+  new({ResourceProvider? resourceProvider, this._onConfigurationDependency})
     : resourceProvider = resourceProvider ?? PhysicalResourceProvider.INSTANCE;
 
   /// Return an analysis context corresponding to the given [contextRoot].
@@ -71,9 +73,11 @@ class ContextBuilderImpl {
   /// If an [sdkSummaryPath] is provided, then that file will be used as the
   /// summary file for the SDK.
   DriverBasedAnalysisContext createContext({
+    AnalysisOptionsParseSession? analysisOptionsParseSession,
     ByteStore? byteStore,
     required ContextRootImpl contextRoot,
-    bool definedOptionsFile = false,
+    String? optionsFileOverride,
+    String? packageConfigOverride,
     DeclaredVariables? declaredVariables,
     bool drainStreams = true,
     bool enableIndex = false,
@@ -126,7 +130,7 @@ class ContextBuilderImpl {
 
     var optionsFile = contextRoot.optionsFile;
     var sourceFactory = workspace.createSourceFactory(sdk, summaryData);
-    var analysisOptionsParseSession = AnalysisOptionsParseSession();
+    analysisOptionsParseSession ??= AnalysisOptionsParseSession();
 
     // Applies the client's settings to analysis options. Every
     // `AnalysisOptionsImpl` of the context goes through this function once:
@@ -156,9 +160,8 @@ class ContextBuilderImpl {
     }
 
     AnalysisOptionsMap analysisOptionsMap;
-    // If there's an options file defined (as, e.g. passed into the
-    // AnalysisContextCollection), use a shared options map based on it.
-    if (definedOptionsFile && optionsFile != null) {
+    // An explicit options file applies to every file in the context.
+    if (optionsFileOverride != null && optionsFile != null) {
       analysisOptionsMap = AnalysisOptionsMap.forSharedOptions(
         _getAnalysisOptions(
           optionsFile,
@@ -192,6 +195,8 @@ class ContextBuilderImpl {
       analysisOptionsMap: analysisOptionsMap,
       packages: _createPackageMap(contextRoot: contextRoot),
       analysisContext: analysisContext,
+      optionsFileOverride: optionsFileOverride,
+      packageConfigOverride: packageConfigOverride,
       enableIndex: enableIndex,
       languageVersionOverride: languageVersionOverride,
       externalSummaries: summaryData,
@@ -288,6 +293,7 @@ class ContextBuilderImpl {
       );
       if (embedderYamlSource != null) {
         var embedderYamlPath = embedderYamlSource.fullName;
+        _onConfigurationDependency?.call(embedderYamlPath);
         var libFolder = resourceProvider.getFile(embedderYamlPath).parent;
         var embedderYaml = locateEmbedderYamlFor(libFolder);
         if (embedderYaml != null) {

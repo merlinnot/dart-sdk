@@ -145,6 +145,12 @@ class File : public ReferenceCounted<File> {
                     int64_t length,
                     void* start = nullptr);
 
+#if defined(DART_HOST_OS_LINUX)
+  // Returns an unmodifiable Uint8List for a regular file of exactly 'length'
+  // bytes. The list and its subviews keep the mapping alive after unlink.
+  static Dart_Handle MapReadOnlyShared(const char* path, intptr_t length);
+#endif
+
   // Read at most 'num_bytes' from the file. It may read less than 'num_bytes'
   // even when EOF is not encountered. If no data is available then `Read`
   // will block waiting for input (e.g. if the file represents a pipe that

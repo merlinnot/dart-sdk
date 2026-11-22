@@ -9,6 +9,7 @@ import 'dart:isolate';
 import 'package:analyzer/instrumentation/instrumentation.dart';
 import 'package:analyzer_plugin/channel/channel.dart';
 import 'package:analyzer_plugin/protocol/protocol.dart';
+import 'package:analyzer_plugin/protocol/protocol_constants.dart';
 import 'package:analyzer_plugin/protocol/protocol_generated.dart';
 
 /// The type of the function used to run a built-in plugin in an isolate.
@@ -82,6 +83,9 @@ class PluginIsolateChannel implements PluginCommunicationChannel {
   /// The port used to send notifications and responses to the server.
   final SendPort _sendPort;
 
+  /// Transport-only fields offered with the initial version check.
+  Map<String, Object>? startupCapabilities;
+
   /// The port used to receive requests from the server.
   late final ReceivePort _receivePort;
 
@@ -110,6 +114,9 @@ class PluginIsolateChannel implements PluginCommunicationChannel {
     void onData(data) {
       var requestMap = data as Map<String, Object>;
       var request = Request.fromJson(requestMap);
+      if (request.method == PLUGIN_REQUEST_VERSION_CHECK) {
+        startupCapabilities = requestMap;
+      }
       onRequest(request);
     }
 
