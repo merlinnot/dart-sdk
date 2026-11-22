@@ -35,27 +35,6 @@ void main() {
       await first;
     });
 
-    test(
-      'producer failure wakes waiting readers and rejects later requests',
-      () async {
-        // An invalid context root fails inside the producer. Both readers must
-        // receive the failure before their normal idle timeout.
-        Future<SummaryPreparationResult> invalidRequest(
-          LinkedSummaryCoordinator reader,
-        ) => reader.prepare(root: 'relative', paths: []);
-
-        var results = await Future.wait([
-          invalidRequest(broker),
-          invalidRequest(plugin),
-        ]).timeout(const Duration(seconds: 5));
-        expect(results, everyElement(SummaryPreparationResult.unavailable));
-        expect(
-          await invalidRequest(plugin).timeout(const Duration(seconds: 5)),
-          SummaryPreparationResult.unavailable,
-        );
-      },
-    );
-
     if (!Platform.isMacOS) {
       return;
     }
@@ -103,6 +82,82 @@ void main() {
 
         return published;
       }
+
+      test('invalid paths decline only the malformed request', () async {
+        var entry = writeLibrary('entry', 'class Entry {}');
+        Future<SummaryPreparationResult> request({
+          String? root,
+          String? options,
+          String? packages,
+          List<String>? paths,
+          List<String> changedFiles = const [],
+          Map<String, String> overlays = const {},
+        }) => plugin.prepare(
+          root: root ?? directory.path,
+          paths: paths ?? [entry],
+          options: options,
+          packages: packages,
+          changedFiles: changedFiles,
+          overlays: overlays,
+        );
+
+        expect(await request(), SummaryPreparationResult.prepared);
+        for (var invalid in [
+          'relative',
+          '${directory.path}/./entry.dart',
+          '${directory.path}/bad\x00name',
+        ]) {
+          expect(
+            await request(root: invalid),
+            SummaryPreparationResult.unavailable,
+          );
+          expect(
+            await request(paths: [entry, invalid]),
+            SummaryPreparationResult.unavailable,
+          );
+          expect(
+            await request(options: invalid),
+            SummaryPreparationResult.unavailable,
+          );
+          expect(
+            await request(packages: invalid),
+            SummaryPreparationResult.unavailable,
+          );
+          expect(
+            await request(changedFiles: [invalid]),
+            SummaryPreparationResult.unavailable,
+          );
+          expect(
+            await request(overlays: {invalid: ''}),
+            SummaryPreparationResult.unavailable,
+          );
+        }
+        expect(await request(), SummaryPreparationResult.prepared);
+      });
+
+      test(
+        'a progress notification exposes a cycle before the final reply',
+        () async {
+          var entry = writeLibrary('entry', 'class Entry {}');
+          var notifications = <List<String>>[];
+          var result = await plugin.prepare(
+            root: directory.path,
+            paths: [entry],
+            onAvailable: (cycles) =>
+                notifications.add(cycles.takePaths().toList()),
+          );
+
+          expect(result, SummaryPreparationResult.prepared);
+          // The coordinator also invokes onAvailable for the final reply.
+          // Only the preceding callbacks are progress from the producer.
+          expect(
+            notifications
+                .take(notifications.length - 1)
+                .expand((paths) => paths),
+            isNotEmpty,
+          );
+        },
+      );
 
       test(
         'publishes dependencies first and reuses them on later requests',
@@ -296,24 +351,38 @@ void main() {
         );
       }
 
-      test(
-        'standalone shutdown releases the arena and persists every cycle',
-        () async {
-          var entry = writeLibrary(
-            'entry',
-            [for (var i = 0; i < 32; i++) "export 'dep$i.dart';"].join('\n'),
-          );
-          for (var i = 0; i < 32; i++) {
-            writeLibrary('dep$i', 'class C$i {}');
-          }
-          var temp = Directory('${directory.path}/temp')..createSync();
-          var state = Directory('${directory.path}/state')..createSync();
-          await _runShutdownFixture(entry, temp: temp, state: state);
-          expect(temp.listSync(), isEmpty);
+      for (var mode in _ShutdownMode.values) {
+        test(
+          '${mode.name} releases the arena and persists completed cycles',
+          () async {
+            var entry = writeLibrary(
+              'entry',
+              [for (var i = 0; i < 32; i++) "export 'dep$i.dart';"].join('\n'),
+            );
+            for (var i = 0; i < 32; i++) {
+              writeLibrary('dep$i', 'class C$i {}');
+            }
+            var temp = Directory('${directory.path}/temp')..createSync();
+            var state = Directory('${directory.path}/state')..createSync();
+            await _runShutdownFixture(
+              entry,
+              mode: mode,
+              temp: temp,
+              state: state,
+            );
+            expect(temp.listSync(), isEmpty);
 
-          await _expectPersistedSummaries(entry, state: state, sdk: sdk);
-        },
-      );
+            expect(
+              state
+                  .listSync(recursive: true)
+                  .whereType<File>()
+                  .where((file) => file.path.contains('-temp-')),
+              isEmpty,
+            );
+            await _expectPersistedSummaries(entry, state: state, sdk: sdk);
+          },
+        );
+      }
 
       test('returning to a scope reuses its collection and overlays', () async {
         var first = writeLibrary('first', 'class First {}');
@@ -414,6 +483,7 @@ Future<void> _expectPersistedSummaries(
 
 Future<void> _runShutdownFixture(
   String entry, {
+  required _ShutdownMode mode,
   required Directory temp,
   required Directory state,
 }) async {
@@ -429,6 +499,7 @@ Future<void> _runShutdownFixture(
       '--packages=${(await Isolate.packageConfig)!}',
       script.toFilePath(),
       entry,
+      mode.name,
     ],
     environment: {
       'TMPDIR': temp.path,
@@ -441,3 +512,5 @@ Future<void> _runShutdownFixture(
 }
 
 enum _ConfigSource { discovered, explicit, included }
+
+enum _ShutdownMode { shutdown, producerFailure }

@@ -4,6 +4,8 @@
 
 part of 'linked_summary_coordinator.dart';
 
+enum _ProducerEvent { failed }
+
 /// Runs requests serially in a dedicated isolate. Each request applies its
 /// editor overlays before linking and publishes dependency cycles as they finish.
 final class _SummaryProducer(
@@ -11,6 +13,7 @@ final class _SummaryProducer(
   final String _sdk,
   final _ArenaDescriptor _descriptor,
   final Stopwatch _clock,
+  final FileByteStore? _diskStore,
 ) {
   static const _notificationInterval = Duration(milliseconds: 80);
 
@@ -20,27 +23,23 @@ final class _SummaryProducer(
     PublishingSummaryStore(_diskStore ?? NullByteStore(), _writer),
   );
   final _stats = _traceDirectory == null ? null : _SummaryProducerStats();
-  late final _diskStore = _openDiskStore();
   int _nextNotificationMs = 0;
 
-  FileByteStore? _openDiskStore() {
-    var cache = PhysicalResourceProvider.INSTANCE.getStateLocation(
-      '.analysis-driver',
-    );
+  Future<void> _close() async {
+    try {
+      await _diskStore?.flush();
+    } finally {
+      _writer.close();
+    }
+  }
 
-    if (cache == null) {
+  /// Returns the published arena, or null if the reader must handle the request
+  /// locally. Validate the entire request before it can change cached contexts.
+  Future<_ArenaDescriptor?> _produce(SummaryRequest request) async {
+    if (!_hasValidPaths(request)) {
       return null;
     }
 
-    return FileByteStore(
-      cache.path,
-      tempNameSuffix: path.basename(_descriptor.directory),
-    );
-  }
-
-  /// Returns the published arena, or null if a path has no owning context
-  /// and the reader must finish this request locally.
-  Future<_ArenaDescriptor?> _produce(SummaryRequest request) async {
     var (:collection, :scopeKey) = await _contexts.prepare(request);
     _writer.selectScope(scopeKey);
 
@@ -102,26 +101,61 @@ final class _SummaryProducer(
           case (:String invalidatedRoot):
             await producer?._contexts.invalidateRoot(invalidatedRoot);
           case SummaryRequest request:
-            producer ??= _SummaryProducer(host, sdk, descriptor, clock);
+            producer ??= _SummaryProducer(
+              host,
+              sdk,
+              descriptor,
+              clock,
+              _openDiskStore(directory),
+            );
             var arena = await producer._produce(request);
             host.send((reader: request.reply, arena: arena));
         }
       }
-
-      await producer?._diskStore?.flush();
     } catch (error, stack) {
+      host.send(_ProducerEvent.failed);
+
       if (_traceDirectory != null) {
         _writeTrace('producer-error.txt', '$error\n$stack');
       }
     } finally {
       inbox.close();
       try {
-        producer?._writer.close();
+        await producer?._close();
       } finally {
-        // The exit notification lets the broker release all waiting readers.
+        // Analysis drivers can still own live ports after cleanup.
         Isolate.exit();
       }
     }
+  }
+
+  static bool _hasValidPaths(SummaryRequest request) {
+    bool valid(String? value) =>
+        value == null ||
+        (path.isAbsolute(value) &&
+            path.normalize(value) == value &&
+            !value.contains('\x00'));
+
+    var scope = request.scope;
+
+    return valid(scope.root) &&
+        valid(scope.options) &&
+        valid(scope.packages) &&
+        request.paths.every(valid) &&
+        request.changedFiles.every(valid) &&
+        request.overlays.keys.every(valid);
+  }
+
+  static FileByteStore? _openDiskStore(String directory) {
+    var cache = PhysicalResourceProvider.INSTANCE.getStateLocation(
+      '.analysis-driver',
+    );
+
+    if (cache == null) {
+      return null;
+    }
+
+    return FileByteStore(cache.path, tempNameSuffix: path.basename(directory));
   }
 }
 
