@@ -19,6 +19,8 @@ import 'file_byte_store_test.dart' as file_byte_store_test;
 import 'file_state_test.dart' as file_state;
 import 'fletcher16_test.dart' as fletcher16_test;
 import 'index_test.dart' as index;
+import 'linked_summary_coordinator_test.dart' as linked_summary_coordinator;
+import 'mapped_summary_test.dart' as mapped_summary;
 import 'referenced_names_test.dart' as referenced_names;
 import 'resolve_for_completion_test.dart' as resolve_for_completion;
 import 'results/test_all.dart' as results;
@@ -47,6 +49,8 @@ main() {
     file_state.main();
     fletcher16_test.main();
     index.main();
+    linked_summary_coordinator.main();
+    mapped_summary.main();
     referenced_names.main();
     resolve_for_completion.main();
     results.main();
