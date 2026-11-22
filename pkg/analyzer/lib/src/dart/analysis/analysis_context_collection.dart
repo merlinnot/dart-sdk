@@ -9,6 +9,7 @@ import 'package:analyzer/dart/analysis/declared_variables.dart';
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/file_system/physical_file_system.dart';
 import 'package:analyzer/src/analysis_options/analysis_options.dart';
+import 'package:analyzer/src/analysis_options/analysis_options_parser.dart';
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
 import 'package:analyzer/src/dart/analysis/context_builder.dart';
 import 'package:analyzer/src/dart/analysis/context_locator.dart';
@@ -36,7 +37,14 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
   final List<DriverBasedAnalysisContext> contexts = [];
 
   /// Initialize a newly created analysis context manager.
+  ///
+  /// Supply a fresh [analysisOptionsParseSession] to track the files that root
+  /// discovery and driver creation attempt to read when parsing options.
+  /// [onConfigurationDependency] also reports paths consulted when choosing
+  /// the SDK or workspace, including configuration that does not yet exist.
   new({
+    AnalysisOptionsParseSession? analysisOptionsParseSession,
+    void Function(String path)? onConfigurationDependency,
     ByteStore? byteStore,
     Map<String, String>? declaredVariables,
     bool drainStreams = true,
@@ -80,6 +88,8 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
     _throwIfNotAbsoluteNormalizedPath(sdkPath);
 
     var roots = locateContextRoots(
+      onConfigurationDependency: onConfigurationDependency,
+      analysisOptionsParseSession: analysisOptionsParseSession,
       includedPaths: includedPaths,
       excludedPaths: excludedPaths,
       resourceProvider: this.resourceProvider,
@@ -90,11 +100,13 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
     byteStore ??= MemoryByteStore();
 
     var contextBuilder = ContextBuilderImpl(
+      onConfigurationDependency: onConfigurationDependency,
       resourceProvider: this.resourceProvider,
     );
 
     for (var root in roots) {
       var context = contextBuilder.createContext(
+        analysisOptionsParseSession: analysisOptionsParseSession,
         byteStore: byteStore,
         contextRoot: root,
         definedOptionsFile: optionsFile != null,
@@ -121,7 +133,12 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
   }
 
   @override
-  DriverBasedAnalysisContext contextFor(String path) {
+  DriverBasedAnalysisContext contextFor(String path) =>
+      contextForOrNull(path) ??
+      (throw StateError('Unable to find the context to $path'));
+
+  /// Returns the owning context, or null when no context analyzes [path].
+  DriverBasedAnalysisContext? contextForOrNull(String path) {
     _throwIfNotAbsoluteNormalizedPath(path);
 
     for (var context in contexts) {
@@ -130,7 +147,7 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
       }
     }
 
-    throw StateError('Unable to find the context to $path');
+    return null;
   }
 
   @override
