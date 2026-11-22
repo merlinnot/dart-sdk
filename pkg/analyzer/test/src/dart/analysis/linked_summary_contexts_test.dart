@@ -5,84 +5,238 @@
 import 'dart:io';
 import 'dart:isolate';
 
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/src/dart/analysis/analysis_context_collection.dart';
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
 import 'package:analyzer/src/dart/analysis/linked_summary_contexts.dart';
 import 'package:analyzer/src/dart/analysis/linked_summary_protocol.dart';
+import 'package:analyzer/src/workspace/pub.dart';
 import 'package:test/test.dart';
 
 void main() {
+  late Directory directory;
+  late File entry;
+  late SummaryProducerContexts contexts;
+  late ReceivePort reply;
+
+  File file(String relativePath) =>
+      File.fromUri(directory.uri.resolve(relativePath));
+
+  Future<AnalysisContextCollectionImpl> prepare(
+    String mode, {
+    List<String> changed = const [],
+    Map<String, String> overlays = const {},
+    String? options,
+  }) async {
+    var result = await contexts.prepare(
+      SummaryRequest(
+        scope: SummaryAnalysisScope(
+          directory.path,
+          variables: {'mode': mode},
+          options: options,
+        ),
+        paths: [entry.path],
+        overlays: overlays,
+        changedFiles: changed,
+        reply: reply.sendPort,
+        wantsProgress: false,
+      ),
+    );
+
+    return result.collection;
+  }
+
+  bool includesEntry(AnalysisContextCollectionImpl collection) => collection
+      .contexts
+      .any((context) => context.contextRoot.isAnalyzed(entry.path));
+
+  String parsedSource(AnalysisContextCollectionImpl collection) {
+    var driver = collection.contextFor(entry.path).driver;
+    var unit = driver.parseFileSync(entry.path) as ParsedUnitResult;
+
+    return unit.content;
+  }
+
+  setUp(() {
+    directory = Directory.systemTemp.createTempSync('producer-contexts-');
+    entry = file('entry.dart')..writeAsStringSync('int disk = 0;');
+    reply = ReceivePort();
+    contexts = SummaryProducerContexts(
+      File(Platform.resolvedExecutable).parent.parent.path,
+      MemoryByteStore(),
+    );
+  });
+
+  tearDown(() async {
+    await contexts.dispose();
+    reply.close();
+    directory.deleteSync(recursive: true);
+  });
+
   test(
-    'disk edits refresh all scopes and option overlays affect only their owner',
+    'source overlays are isolated and removal reveals the latest disk edit',
     () async {
-      var directory = await Directory.systemTemp.createTemp(
-        'producer-contexts-',
-      );
-      addTearDown(() => directory.delete(recursive: true));
-      var reply = ReceivePort();
-      addTearDown(reply.close);
-      var contexts = SummaryProducerContexts(
-        File(Platform.resolvedExecutable).parent.parent.path,
-        MemoryByteStore(),
-      );
-      var entry = File('${directory.path}/entry.dart')..writeAsStringSync('');
-      File('${directory.path}/analysis_options.yaml')
-          .writeAsStringSync('include: shared.yaml');
-      var shared = File('${directory.path}/shared.yaml')
-        ..writeAsStringSync('analyzer: {}');
-      var latest = <String, AnalysisContextCollectionImpl>{};
-      addTearDown(() async {
-        for (var collection in latest.values) {
-          await collection.dispose();
-        }
-      });
+      var overlay = {entry.path: 'int unsaved = 1;'};
+      var editor = await prepare('editor', overlays: overlay);
+      var disk = await prepare('disk');
+      expect(parsedSource(editor), 'int unsaved = 1;');
+      expect(parsedSource(disk), 'int disk = 0;');
 
-      Future<AnalysisContextCollectionImpl> prepare(
-        String mode, {
-        List<String> changed = const [],
-        Map<String, String> overlays = const {},
-      }) async => latest[mode] = (await contexts.prepare(
-        SummaryRequest(
-          scope: SummaryAnalysisScope(
-            directory.path,
-            variables: {'mode': mode},
-          ),
-          paths: [entry.path],
-          overlays: overlays,
-          changedFiles: changed,
-          reply: reply.sendPort,
-          wantsProgress: false,
-        ),
-      )).collection;
-
-      bool includesEntry(AnalysisContextCollectionImpl collection) => collection
-          .contexts
-          .any((context) => context.contextRoot.isAnalyzed(entry.path));
-
-      var first = await prepare('first');
-      var second = await prepare('second');
-      expect(includesEntry(first), isTrue);
-      expect(second, isNot(same(first)));
-      expect(await prepare('first', changed: [entry.path]), same(first));
-
-      shared.writeAsStringSync('analyzer:\n  exclude: [entry.dart]');
+      entry.writeAsStringSync('int updatedOnDisk = 2;');
+      // The editor reports the disk edit while it still has unsaved contents.
       expect(
-        includesEntry(await prepare('first', changed: [shared.path])),
-        isFalse,
+        await prepare('editor', overlays: overlay, changed: [entry.path]),
+        same(editor),
       );
-      var refreshedSecond = await prepare('second');
-      expect(refreshedSecond, isNot(same(second)));
-      expect(includesEntry(refreshedSecond), isFalse);
+      expect(parsedSource(editor), 'int unsaved = 1;');
+      expect(parsedSource(disk), 'int updatedOnDisk = 2;');
 
       expect(
-        includesEntry(
-          await prepare('first', overlays: {shared.path: 'analyzer: {}'}),
-        ),
-        isTrue,
+        await prepare('editor', overlays: {entry.path: 'int editedAgain = 3;'}),
+        same(editor),
       );
-      expect(await prepare('second'), same(refreshedSecond));
-      expect(includesEntry(await prepare('first')), isFalse);
-      expect(contexts.length, 2);
+      expect(parsedSource(editor), 'int editedAgain = 3;');
+      expect(parsedSource(disk), 'int updatedOnDisk = 2;');
+
+      expect(await prepare('editor'), same(editor));
+      expect(parsedSource(editor), 'int updatedOnDisk = 2;');
+      expect(await prepare('disk'), same(disk));
     },
   );
+
+  test(
+    'a disk edit rebuilds only scopes that see the edited options',
+    () async {
+      file('analysis_options.yaml').writeAsStringSync('include: shared.yaml');
+      var shared = file('shared.yaml')..writeAsStringSync('analyzer: {}');
+      var disk = await prepare('disk');
+      var originalEditor = await prepare('editor');
+      var overlay = {shared.path: 'analyzer:\n  exclude: [entry.dart]'};
+      var editor = await prepare('editor', overlays: overlay);
+      expect(editor, isNot(same(originalEditor)));
+      expect(includesEntry(editor), isFalse);
+      expect(includesEntry(disk), isTrue);
+
+      shared.writeAsStringSync('# new disk options');
+      var refreshed = await prepare('disk', changed: [shared.path]);
+      expect(refreshed, isNot(same(disk)));
+      expect(includesEntry(refreshed), isTrue);
+      expect(await prepare('editor', overlays: overlay), same(editor));
+      expect(includesEntry(editor), isFalse);
+
+      expect(includesEntry(await prepare('editor')), isTrue);
+      expect(await prepare('disk'), same(refreshed));
+    },
+  );
+
+  test(
+    'tracks missing includes and forgets includes that are no longer used',
+    () async {
+      var options = file('analysis_options.yaml')
+        ..writeAsStringSync('include: missing.yaml');
+      var missing = file('missing.yaml');
+      expect(includesEntry(await prepare('editor')), isTrue);
+
+      missing.writeAsStringSync('analyzer:\n  exclude: [entry.dart]');
+      expect(
+        includesEntry(await prepare('editor', changed: [missing.path])),
+        isFalse,
+      );
+      options.writeAsStringSync('analyzer: {}');
+      var current = await prepare('editor', changed: [options.path]);
+      expect(includesEntry(current), isTrue);
+
+      missing.deleteSync();
+      expect(await prepare('editor', changed: [missing.path]), same(current));
+    },
+  );
+
+  test(
+    'an explicit options file takes precedence over a new default',
+    () async {
+      var custom = file('custom.yaml')..writeAsStringSync('analyzer: {}');
+      var explicit = await prepare('explicit', options: custom.path);
+      var automatic = await prepare('automatic');
+      var options = file('analysis_options.yaml')
+        ..writeAsStringSync('analyzer:\n  exclude: [entry.dart]');
+
+      expect(
+        await prepare(
+          'explicit',
+          options: custom.path,
+          changed: [options.path],
+        ),
+        same(explicit),
+      );
+      expect(includesEntry(explicit), isTrue);
+      var refreshed = await prepare('automatic');
+      expect(refreshed, isNot(same(automatic)));
+      expect(includesEntry(refreshed), isFalse);
+    },
+  );
+
+  test(
+    'discovering and removing a nested package config changes the file owner',
+    () async {
+      var nested = file('nested/entry.dart')..createSync(recursive: true);
+      String rootFor(AnalysisContextCollectionImpl collection) =>
+          collection.contextFor(nested.path).contextRoot.root.path;
+
+      expect(rootFor(await prepare('disk')), directory.path);
+      var config = file('nested/.dart_tool/package_config.json')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('{"configVersion":2,"packages":[]}');
+      expect(
+        rootFor(await prepare('disk', changed: [config.path])),
+        nested.parent.path,
+      );
+
+      config.deleteSync();
+      expect(
+        rootFor(await prepare('disk', changed: [config.path])),
+        directory.path,
+      );
+    },
+  );
+
+  test(
+    'adding a nested BUILD.gn creates a context for that directory',
+    () async {
+      var nested = file('nested/entry.dart')..createSync(recursive: true);
+      var original = await prepare('disk');
+      expect(
+        original.contextFor(nested.path),
+        same(original.contextFor(entry.path)),
+      );
+
+      var marker = file('nested/BUILD.gn')..createSync();
+      var refreshed = await prepare('disk', changed: [marker.path]);
+      expect(
+        refreshed.contextFor(nested.path).contextRoot.root.path,
+        nested.parent.path,
+      );
+    },
+  );
+
+  test('changing the pubspec refreshes Pub workspace membership', () async {
+    file('.dart_tool/package_config.json')
+      ..createSync(recursive: true)
+      ..writeAsStringSync('{"configVersion":2,"packages":[]}');
+    var pubspec = file('pubspec.yaml')..writeAsStringSync('name: example');
+    bool isWorkspace(AnalysisContextCollectionImpl collection) {
+      var root = collection.contextFor(entry.path).contextRoot;
+
+      return (root.workspace as PackageConfigWorkspace).isPubWorkspace;
+    }
+
+    expect(isWorkspace(await prepare('disk')), isFalse);
+
+    pubspec.writeAsStringSync('name: example\nworkspace: [packages/member]');
+    expect(isWorkspace(await prepare('disk', changed: [pubspec.path])), isTrue);
+    pubspec.deleteSync();
+    expect(
+      isWorkspace(await prepare('disk', changed: [pubspec.path])),
+      isFalse,
+    );
+  });
 }
