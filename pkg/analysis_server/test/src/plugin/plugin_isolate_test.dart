@@ -527,7 +527,7 @@ class PluginSessionTest with ResourceProviderMixin {
       stopping.handleOnDone();
       await alreadyStopping;
 
-      if (io.Platform.isMacOS) {
+      if (LinkedSummaryCoordinator.isSupported) {
         var entry = io.File.fromUri(directory.uri.resolve('entry.dart'))
           ..writeAsStringSync('class Entry {}');
         var result = await reader

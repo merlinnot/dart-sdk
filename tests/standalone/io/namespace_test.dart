@@ -5,6 +5,7 @@
 import "dart:async";
 import "dart:io";
 
+import "package:analyzer/src/dart/analysis/mapped_summary.dart";
 import "package:expect/expect.dart";
 
 const String file1str = "file1";
@@ -180,30 +181,56 @@ doTestAsync() async {
   Expect.equals(FileSystemEntityType.directory, dirstat.type);
 }
 
-void setupTest() {
+void checkSummaryMapping() {
+  // The standalone Linux VM supplies the mapper through the dart:io resolver.
+  Expect.isTrue(supportsSummaryMapping);
+  for (var path in ['/dir1/dir2/file1', 'dir1/dir2/file1']) {
+    Expect.listEquals(
+      file1str.codeUnits,
+      mapSummaryFile(path, file1str.length),
+    );
+  }
+  Expect.throws(
+    () => mapSummaryFile('/pipe', 1),
+    (error) => error is FileSystemException,
+  );
+}
+
+Future<void> setupTest() async {
   // Create a namespace in /tmp.
   Directory namespace = Directory.systemTemp.createTempSync("namespace");
   try {
     // Create some stuff that should be visible.
     Directory dir1 = new Directory("${namespace.path}/dir1")..createSync();
     Directory dir2 = new Directory("${dir1.path}/dir2")..createSync();
-    File file1 = new File("${dir2.path}/file1")
-      ..createSync()
-      ..writeAsStringSync(file1str);
+    File("${dir2.path}/file1").writeAsStringSync(file1str);
 
-    // Run the test and capture stdout.
+    var fifo = Process.runSync('mkfifo', ['${namespace.path}/pipe']);
+    Expect.equals(0, fifo.exitCode, fifo.stderr.toString());
+
+    // Run inside the namespace. A blocking open on the FIFO needs a timeout
+    // in the parent since the child cannot service a timer during a native call.
     var args = <String>[]..addAll(Platform.executableArguments);
     args.addAll([
       "--namespace=${namespace.path}",
       Platform.script.toFilePath(),
       "--run",
     ]);
-    var pr = Process.runSync(Platform.executable, args);
-    if (pr.exitCode != 0) {
-      print("stdout:\n${pr.stdout}");
-      print("stderr:\n${pr.stderr}");
+    var child = await Process.start(
+      Platform.executable,
+      args,
+      mode: ProcessStartMode.inheritStdio,
+    );
+    try {
+      Expect.equals(
+        0,
+        await child.exitCode.timeout(const Duration(minutes: 1)),
+      );
+    } on TimeoutException {
+      child.kill(ProcessSignal.sigkill);
+      await child.exitCode;
+      rethrow;
     }
-    Expect.equals(0, pr.exitCode);
   } finally {
     namespace.deleteSync(recursive: true);
   }
@@ -214,9 +241,10 @@ main(List<String> arguments) async {
     return;
   }
   if (arguments.contains("--run")) {
+    checkSummaryMapping();
     doTestSync();
     await doTestAsync();
   } else {
-    setupTest();
+    await setupTest();
   }
 }

@@ -372,10 +372,13 @@ abstract class AnalysisServer {
     );
     LinkedSummaryBroker? summaryBroker;
     var serverEnvironment = environment ?? io.Platform.environment;
-    if (LinkedSummaryCoordinator.isSupported &&
-        _byteStore.usesFileByteStore &&
+    var enableSharedSummaries =
+        serverEnvironment['DART_ANALYZER_LINKED_SUMMARY_COORDINATOR'] == '1';
+
+    if (enableSharedSummaries &&
         usePlugins != false &&
-        serverEnvironment['DART_ANALYZER_LINKED_SUMMARY_COORDINATOR'] == '1') {
+        _byteStore.usesFileByteStore &&
+        LinkedSummaryCoordinator.isSupported) {
       summaryBroker = LinkedSummaryBroker(sdkManager.defaultSdkDirectory);
       _summarySessions = PluginSummarySessions(summaryBroker);
       pluginManager.summarySessions = _summarySessions;
