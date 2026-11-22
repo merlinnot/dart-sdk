@@ -71,11 +71,15 @@ Uint8List mapSummaryFile(String path, int length) {
 /// Returns a shared mapping of the file. The caller owns the mapping.
 Pointer<Void> _mapReadOnlyFile(String path, int length) {
   const openReadOnly = 0;
+  const openNonBlocking = 0x0004; // O_NONBLOCK on Darwin.
   const seekEnd = 2;
   const protectRead = 1;
   const mapShared = 1;
   var descriptor = using(
-    (arena) => _open(path.toNativeUtf8(allocator: arena), openReadOnly),
+    (arena) => _open(
+      path.toNativeUtf8(allocator: arena),
+      openReadOnly | openNonBlocking,
+    ),
   );
 
   if (descriptor < 0) {

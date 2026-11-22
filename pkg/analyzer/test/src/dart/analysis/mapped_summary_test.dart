@@ -2,6 +2,7 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -58,6 +59,30 @@ void main() {
         () => mapSummaryFile(file.path, 4),
         throwsA(isA<FileSystemException>()),
       );
+    });
+
+    test('rejects a FIFO without waiting for a writer', () async {
+      var fifo = await Process.run('mkfifo', [file.path]);
+      expect(fifo.exitCode, 0, reason: fifo.stderr.toString());
+      var analyzer = (await Isolate.resolvePackageUri(
+        Uri.parse('package:analyzer/'),
+      ))!;
+      var fixture = analyzer.resolve(
+        '../test/src/dart/analysis/fixtures/map_summary_fifo.dart',
+      );
+      var child = await Process.start(Platform.resolvedExecutable, [
+        '--packages=${(await Isolate.packageConfig)!}',
+        fixture.toFilePath(),
+        file.path,
+      ]);
+      var errors = child.stderr.transform(utf8.decoder).join();
+      try {
+        var status = await child.exitCode.timeout(const Duration(seconds: 10));
+        expect(status, 0, reason: await errors);
+      } finally {
+        child.kill(ProcessSignal.sigkill);
+        await child.exitCode;
+      }
     });
 
     test('rejects a missing file', () {
