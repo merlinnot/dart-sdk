@@ -1538,9 +1538,11 @@ class ResolutionReader {
       case ElementTag.libraryImportPrefix:
         var fragmentUri = _reader.readUri();
         var prefixId = _reader.readStringReference();
-        return currentLibraryFragment.element.fragments
-            .singleWhere((fragment) => fragment.source.uri == fragmentUri)
-            .libraryImportPrefixById(prefixId);
+        // Decoding a stored prefix must not record a use of the fragments API.
+        var fragment = currentLibraryFragment.element.internal.fragments
+            .singleWhere((fragment) => fragment.source.uri == fragmentUri);
+
+        return fragment.libraryImportPrefixById(prefixId);
       case ElementTag.typeParameter:
         var index = _reader.readUint30();
         return _localElements[index] as TypeParameterElementImpl;

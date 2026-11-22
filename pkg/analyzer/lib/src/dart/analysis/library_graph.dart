@@ -125,10 +125,13 @@ class LibraryCycleComputer {
     required SourceFactory sourceFactory,
   }) : _uriResolutionEnvironment = _UriResolutionEnvironment(sourceFactory);
 
-  /// Ensure that the `FileState._libraryCycle` for the [file] and anything it
-  /// depends on is computed.
-  void compute(LibraryFileKind file) {
-    var libraryWalker = _LibraryWalker(this);
+  /// Computes cycles reachable from [file]. Calls [onComputed] after assigning
+  /// each new cycle to its libraries, once its dependencies have cycles.
+  void compute(
+    LibraryFileKind file, {
+    void Function(LibraryCycle)? onComputed,
+  }) {
+    var libraryWalker = _LibraryWalker(this, onComputed);
     libraryWalker.walk(libraryWalker.getNode(file));
   }
 }
@@ -173,9 +176,10 @@ class _LibraryNode extends graph.Node<_LibraryNode> {
 /// sorted [LibraryCycle]s.
 class _LibraryWalker extends graph.DependencyWalker<_LibraryNode> {
   final LibraryCycleComputer computer;
+  final void Function(LibraryCycle)? onComputed;
   final Map<LibraryFileKind, _LibraryNode> nodesOfFiles = {};
 
-  new(this.computer);
+  new(this.computer, this.onComputed);
 
   @override
   void evaluate(_LibraryNode v) {
@@ -274,6 +278,8 @@ class _LibraryWalker extends graph.DependencyWalker<_LibraryNode> {
     for (var node in scc) {
       node.kind.internal_setLibraryCycle(cycle);
     }
+
+    onComputed?.call(cycle);
   }
 
   _LibraryNode getNode(LibraryFileKind file) {

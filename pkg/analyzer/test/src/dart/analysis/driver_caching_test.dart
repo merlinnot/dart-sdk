@@ -9,6 +9,8 @@ import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/diagnostic/diagnostic.dart';
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart';
+import 'package:analyzer/src/dart/analysis/library_context.dart';
+import 'package:analyzer/src/util/performance/operation_performance.dart';
 import 'package:analyzer_testing/package_config_file_builder.dart';
 import 'package:analyzer_testing/src/expected_diagnostics.dart'
     as expected_diagnostics;
@@ -75,6 +77,35 @@ int b = a;
 // [diag.invalidAssignment] A value of type 'dynamic' can't be assigned to a variable of type 'int'.
 ''',
     );
+  }
+
+  test_cachedSummary_superParameter_defaultWithImportPrefix() async {
+    withFineDependencies = true;
+    useEmptyByteStore();
+    newFile('$testPackageLibPath/values.dart', 'const defaultValue = 7;');
+    newFile('$testPackageLibPath/base.dart', r'''
+import 'values.dart' as values;
+
+class Base {
+  Base({int value = values.defaultValue});
+}
+''');
+    addTestFile(r'''
+import 'base.dart';
+
+class Derived extends Base {
+  Derived({super.value});
+}
+''');
+
+    driverFor(testFile).produceSummary(testFile.path, (_) {});
+
+    // A fresh driver must resolve the inherited default from the stored bundles.
+    await disposeAnalysisContextCollection();
+    var result = await resolveTestFile();
+
+    expect(result.diagnostics, isEmpty);
+    _assertNoLinkedCycles();
   }
 
   test_change_factoryConstructor_addEqNothing() async {
@@ -368,6 +399,99 @@ void f() {
 
     // Lints don't affect summaries, nothing should be linked.
     _assertNoLinkedCycles();
+  }
+
+  test_loadForResolution_cacheOnly_docImport() async {
+    useEmptyByteStore();
+    var docImport = newFile('$testPackageLibPath/doc.dart', 'class A {}');
+    addTestFile(r'''
+/// @docImport 'doc.dart';
+library;
+''');
+
+    var driver = driverFor(testFile);
+    var target = driver.fsState.getFileForPath(testFile.path).kind.library!;
+    var context = driver.libraryContext;
+    var performance = OperationPerformanceImpl('test');
+
+    expect(
+      context.load(
+        targetLibrary: target,
+        performance: performance,
+        allowLink: false,
+      ),
+      LibraryLoadResult.cacheMiss,
+    );
+    _assertNoLinkedCycles();
+
+    expect(
+      context.load(targetLibrary: target, performance: performance),
+      LibraryLoadResult.loaded,
+    );
+    _assertContainsLinkedCycle({testFile}, andClear: true);
+
+    // The target is ready, but resolving its documentation needs another cycle.
+    expect(
+      context.loadForResolution(
+        targetLibrary: target,
+        performance: performance,
+        allowLink: false,
+      ),
+      LibraryLoadResult.cacheMiss,
+    );
+    _assertNoLinkedCycles();
+
+    expect(
+      context.loadForResolution(
+        targetLibrary: target,
+        performance: performance,
+      ),
+      LibraryLoadResult.loaded,
+    );
+    _assertContainsLinkedCycle({docImport});
+
+    // A fresh context can now load both libraries from the byte store.
+    await disposeAnalysisContextCollection();
+    driver = driverFor(testFile);
+    target = driver.fsState.getFileForPath(testFile.path).kind.library!;
+    expect(
+      driver.libraryContext.loadForResolution(
+        targetLibrary: target,
+        performance: performance,
+        allowLink: false,
+      ),
+      LibraryLoadResult.loaded,
+    );
+    _assertNoLinkedCycles();
+  }
+
+  test_produceSummary_part_publishesDependenciesBeforeLibrary() async {
+    withFineDependencies = false;
+    useEmptyByteStore();
+    var dependency = newFile(
+      '$testPackageLibPath/dependency.dart',
+      'class A {}',
+    );
+    var part = newFile('$testPackageLibPath/part.dart', "part of 'test.dart';");
+    addTestFile(r'''
+import 'dependency.dart';
+part 'part.dart';
+
+class B extends A {}
+''');
+
+    var publishedPaths = <String>[];
+    driverFor(testFile).produceSummary(part.path, (cycle) {
+      publishedPaths.addAll(
+        cycle.libraries.map((library) => library.file.path),
+      );
+    });
+
+    var packagePaths = {dependency.path, testFile.path, part.path};
+    expect(publishedPaths.where(packagePaths.contains), [
+      dependency.path,
+      testFile.path,
+    ]);
   }
 
   /// The latest language version for `// @dart` comments is the language

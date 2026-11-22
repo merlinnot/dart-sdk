@@ -1968,17 +1968,23 @@ class LibraryFileKind extends LibraryOrAugmentationFileKind {
 
   /// Return the [LibraryCycle] this file belongs to, even if it consists of
   /// just this file.  If the library cycle is not known yet, compute it.
-  LibraryCycle get libraryCycle {
-    if (_libraryCycle == null) {
-      file._fsState._libraryCycleComputer.compute(this);
-    }
-
-    return _libraryCycle!;
-  }
+  LibraryCycle get libraryCycle => computeLibraryCycle();
 
   @override
   List<UnlinkedLibraryImportDirective> get _unlinkedDocImports {
     return file.unlinked2.libraryDirective?.docImports ?? const [];
+  }
+
+  /// Returns this library's cycle, computing it on first access.
+  ///
+  /// Calls [onComputed] for newly discovered cycles in dependency order.
+  /// An already computed cycle is returned without a callback.
+  LibraryCycle computeLibraryCycle({void Function(LibraryCycle)? onComputed}) {
+    if (_libraryCycle == null) {
+      file._fsState._libraryCycleComputer.compute(this, onComputed: onComputed);
+    }
+
+    return _libraryCycle!;
   }
 
   @override
