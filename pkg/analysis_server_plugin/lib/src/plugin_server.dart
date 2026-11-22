@@ -1261,7 +1261,7 @@ final class _LibraryDiagnosticsContext {
     ResourceProvider resourceProvider,
   ) {
     var fileState = analysisContext.driver.fsState.getFileForPath(libraryPath);
-    var libraryKind = fileState.kind.library ?? fileState.kind.asLibrary;
+    var libraryKind = fileState.kind.libraryForAnalysis;
 
     var allUnits = <RuleContextUnit>[];
     var diagnosticListeners = <RuleContextUnit, RecordingDiagnosticListener>{};
