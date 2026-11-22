@@ -133,7 +133,12 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
   }
 
   @override
-  DriverBasedAnalysisContext contextFor(String path) {
+  DriverBasedAnalysisContext contextFor(String path) =>
+      contextForOrNull(path) ??
+      (throw StateError('Unable to find the context to $path'));
+
+  /// Returns the owning context, or null when no context analyzes [path].
+  DriverBasedAnalysisContext? contextForOrNull(String path) {
     _throwIfNotAbsoluteNormalizedPath(path);
 
     for (var context in contexts) {
@@ -142,7 +147,7 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
       }
     }
 
-    throw StateError('Unable to find the context to $path');
+    return null;
   }
 
   @override

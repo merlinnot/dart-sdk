@@ -9,9 +9,18 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:_fe_analyzer_shared/src/scanner/characters.dart' show $LF;
+import 'package:analyzer/file_system/physical_file_system.dart';
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
+import 'package:analyzer/src/dart/analysis/file_byte_store.dart';
+import 'package:analyzer/src/dart/analysis/library_graph.dart';
+import 'package:analyzer/src/dart/analysis/linked_summary_contexts.dart';
 import 'package:analyzer/src/dart/analysis/linked_summary_protocol.dart';
+import 'package:analyzer/src/dart/analysis/linked_summary_writer.dart';
 import 'package:analyzer/src/dart/analysis/mapped_summary.dart';
+import 'package:path/path.dart' as path;
+
+part 'linked_summary_broker.dart';
+part 'linked_summary_producer.dart';
 
 final _traceDirectory = Platform.environment['DART_ANALYZER_SUMMARY_TRACE_DIR'];
 
@@ -41,11 +50,13 @@ class LinkedSummaryCoordinator {
 
   final SendPort _broker;
   final _pending = <ReceivePort>{};
-  final _stats = _ReaderStats('plugin');
+  final _ReaderStats _stats;
   _CycleIndex? _index;
   bool _closed = false;
 
-  new(this._broker);
+  new(SendPort broker) : this._(broker, 'plugin');
+
+  new _(this._broker, String role) : _stats = _ReaderStats(role);
 
   /// Ends pending requests and releases this reader's reference to the arena.
   /// Previously returned bytes keep their mapping alive.
