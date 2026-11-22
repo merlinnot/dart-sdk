@@ -744,7 +744,7 @@ class LibraryBuilder {
 
     var libraryElement = LibraryElementImpl(
       elementFactory.analysisContext,
-      elementFactory.analysisSession,
+      elementFactory.libraryElementSession,
       name,
       nameOffset,
       nameLength,

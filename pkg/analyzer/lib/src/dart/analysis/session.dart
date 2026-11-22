@@ -152,3 +152,10 @@ class AnalysisSessionImpl implements AnalysisSession {
     return _driver.getUnitElement(path);
   }
 }
+
+/// The session of the libraries still attached to one element factory.
+final class LibraryElementSession {
+  AnalysisSessionImpl current;
+
+  new(this.current);
+}
