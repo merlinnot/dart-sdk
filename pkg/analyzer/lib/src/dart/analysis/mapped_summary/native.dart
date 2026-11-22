@@ -7,13 +7,16 @@ import 'dart:typed_data';
 
 import 'package:analyzer/src/dart/analysis/mapped_summary/linux.dart' as linux;
 import 'package:analyzer/src/dart/analysis/mapped_summary/macos.dart' as macos;
+import 'package:analyzer/src/dart/analysis/mapped_summary/shared_section.dart'
+    as shared;
 import 'package:analyzer/src/dart/analysis/mapped_summary/windows.dart'
     as windows;
 import 'package:analyzer/src/dart/analysis/mapped_summary_stub.dart'
     as unsupported;
 
 bool get supportsSummaryMapping =>
-    Platform.isMacOS || (Platform.isLinux && linux.supportsSummaryMapping);
+    Platform.isMacOS ||
+    ((Platform.isWindows || Platform.isLinux) && shared.supportsSummaryMapping);
 
 Uint8List mapSummaryFile(String path, int length) =>
     switch (Platform.operatingSystem) {

@@ -2,6 +2,7 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -38,7 +39,9 @@ void main() {
     tearDown(() => directory.delete(recursive: true));
 
     test('readers retain their subviews after the file is deleted', () async {
-      await file.writeAsBytes([7, 11, 13]);
+      var writer = SummaryArenaWriter(file.path, 3);
+      addTearDown(writer.close);
+      writer.append(Uint8List.fromList([7, 11, 13]));
       var path = file.path;
       var view = Uint8List.sublistView(mapSummaryFile(path, 3), 1);
 
@@ -98,7 +101,9 @@ void main() {
     }
 
     test('rejects a file with a different length', () async {
-      await file.writeAsBytes([7, 11, 13]);
+      var writer = SummaryArenaWriter(file.path, 3);
+      addTearDown(writer.close);
+      writer.append(Uint8List.fromList([7, 11, 13]));
 
       expect(
         () => mapSummaryFile(file.path, 4),
@@ -113,7 +118,10 @@ void main() {
       );
     });
 
-    for (var failure in _SetupFailure.values) {
+    for (var failure
+        in Platform.isWindows
+            ? [_SetupFailure.descriptor]
+            : [_SetupFailure.open, _SetupFailure.truncate]) {
       test('can retry after failing to ${failure.name} the arena', () {
         IOOverrides.runZoned(
           () => expect(
@@ -178,6 +186,19 @@ final class _FailingFile(final File file, final _SetupFailure failure)
     // A read-only handle makes truncateSync fail on the real file.
     return file.openSync();
   }
+
+  @override
+  void writeAsStringSync(
+    String contents, {
+    FileMode mode = FileMode.write,
+    Encoding encoding = utf8,
+    bool flush = false,
+  }) {
+    throw FileSystemException(
+      'Failed to write the section descriptor',
+      file.path,
+    );
+  }
 }
 
-enum _SetupFailure { open, truncate }
+enum _SetupFailure { open, truncate, descriptor }

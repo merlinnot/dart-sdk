@@ -2,5 +2,19 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-export 'package:analyzer/src/dart/analysis/mapped_summary_stub.dart'
-    show mapSummaryFile;
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:analyzer/src/dart/analysis/mapped_summary/shared_section.dart';
+
+Uint8List mapSummaryFile(String path, int length) {
+  if (!supportsSummaryMapping) {
+    throw UnsupportedError('Native summary mappings unavailable');
+  }
+  var descriptor = jsonDecode(File(path).readAsStringSync());
+  if (descriptor case [int capacity, String name] when capacity == length) {
+    return mapSummarySection(name, length);
+  }
+  throw FileSystemException('Summary section length mismatch', path);
+}

@@ -207,7 +207,13 @@ namespace bin {
   V(X509_StartValidity, 1)                                                     \
   V(X509_EndValidity, 1)
 
-#if defined(DART_HOST_OS_MACOS) || defined(DART_HOST_OS_WINDOWS)
+#if defined(DART_HOST_OS_WINDOWS)
+#define IO_FFI_NATIVE_LIST(V)                                                  \
+  V(FileSystemWatcher::DestroyWatch)                                           \
+  V(File::MapReadOnlyShared)                                                   \
+  V(File::CreateSharedSection)                                                 \
+  V(File::CloseSharedSection)
+#elif defined(DART_HOST_OS_MACOS)
 #define IO_FFI_NATIVE_LIST(V) V(FileSystemWatcher::DestroyWatch)
 #elif defined(DART_HOST_OS_LINUX)
 #define IO_FFI_NATIVE_LIST(V) V(File::MapReadOnlyShared)
