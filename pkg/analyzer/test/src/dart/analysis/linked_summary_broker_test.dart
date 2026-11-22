@@ -136,7 +136,7 @@ void main() {
           expect(await request(plugin), SummaryPreparationResult.prepared);
           options.writeAsStringSync('analyzer:\n  exclude: [entry.dart]');
           broker.invalidateRoot(directory.path);
-          expect(await request(plugin), SummaryPreparationResult.unavailable);
+          expect(await request(plugin), SummaryPreparationResult.declined);
 
           options.writeAsStringSync('analyzer: {}');
           plugin.invalidateRoot(directory.path);
@@ -176,13 +176,13 @@ void main() {
           options.writeAsStringSync(excludeEntry);
           expect(
             await request(changed: [options.path]),
-            SummaryPreparationResult.unavailable,
+            SummaryPreparationResult.declined,
           );
           expect(
             await request(overlays: {options.path: 'analyzer: {}'}),
             SummaryPreparationResult.prepared,
           );
-          expect(await request(), SummaryPreparationResult.unavailable);
+          expect(await request(), SummaryPreparationResult.declined);
           options.deleteSync();
           expect(
             await request(changed: [options.path]),
@@ -191,7 +191,7 @@ void main() {
           options.writeAsStringSync(excludeEntry);
           expect(
             await request(changed: [options.path]),
-            SummaryPreparationResult.unavailable,
+            SummaryPreparationResult.declined,
           );
         });
       }
@@ -205,7 +205,7 @@ void main() {
         var declined = plugin.prepare(root: directory.path, paths: [excluded]);
         var queued = broker.prepare(root: directory.path, paths: [included]);
 
-        expect(await declined, SummaryPreparationResult.unavailable);
+        expect(await declined, SummaryPreparationResult.declined);
         expect(await queued, SummaryPreparationResult.prepared);
         expect(
           await plugin.prepare(root: directory.path, paths: [included]),

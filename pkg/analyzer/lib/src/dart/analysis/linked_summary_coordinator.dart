@@ -22,6 +22,8 @@ import 'package:path/path.dart' as path;
 part 'linked_summary_broker.dart';
 part 'linked_summary_producer.dart';
 
+const _declinedMessage = 'declined';
+
 final _traceDirectory = Platform.environment['DART_ANALYZER_SUMMARY_TRACE_DIR'];
 
 void _writeTrace(String name, String contents) {
@@ -89,8 +91,8 @@ class LinkedSummaryCoordinator {
   /// cursor so the caller can defer reading the index until its next background
   /// turn. Otherwise, the final reply is read before this method completes.
   ///
-  /// Returns [SummaryPreparationResult.unavailable] if the request cannot be
-  /// completed and the caller should continue with local analysis.
+  /// A per-request rejection returns [SummaryPreparationResult.declined].
+  /// An unusable producer or transport returns [SummaryPreparationResult.unavailable].
   Future<SummaryPreparationResult> prepare({
     required String root,
     required List<String> paths,
@@ -156,6 +158,8 @@ class LinkedSummaryCoordinator {
             onAvailable(cycles(descriptor));
 
             return .prepared;
+          case _declinedMessage:
+            return .declined;
           default:
             return .unavailable;
         }
@@ -237,6 +241,9 @@ final class PublishedCycles {
 enum SummaryPreparationResult {
   /// The producer completed the request.
   prepared,
+
+  /// Handle this request locally. The producer can still serve other paths.
+  declined,
 
   /// The caller should continue analysis using its local store.
   unavailable,

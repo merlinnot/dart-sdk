@@ -22,6 +22,7 @@ import 'index_test.dart' as index;
 import 'linked_summary_broker_test.dart' as linked_summary_broker;
 import 'linked_summary_contexts_test.dart' as linked_summary_contexts;
 import 'linked_summary_coordinator_test.dart' as linked_summary_coordinator;
+import 'linked_summary_driver_test.dart' as linked_summary_driver;
 import 'linked_summary_protocol_test.dart' as linked_summary_protocol;
 import 'linked_summary_writer_test.dart' as linked_summary_writer;
 import 'mapped_summary_test.dart' as mapped_summary;
@@ -56,6 +57,7 @@ main() {
     linked_summary_broker.main();
     linked_summary_contexts.main();
     linked_summary_coordinator.main();
+    linked_summary_driver.main();
     linked_summary_protocol.main();
     linked_summary_writer.main();
     mapped_summary.main();

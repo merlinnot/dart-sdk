@@ -16,6 +16,7 @@ import 'package:analyzer/src/dart/analysis/context_locator.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart';
 import 'package:analyzer/src/dart/analysis/driver_based_analysis_context.dart';
 import 'package:analyzer/src/dart/analysis/file_content_cache.dart';
+import 'package:analyzer/src/dart/analysis/linked_summary_coordinator.dart';
 import 'package:analyzer/src/dart/analysis/performance_logger.dart';
 import 'package:analyzer/src/dart/analysis/unlinked_unit_store.dart';
 import 'package:analyzer/src/util/sdk.dart';
@@ -42,6 +43,9 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
   /// discovery and driver creation attempt to read when parsing options.
   /// [onConfigurationDependency] also reports paths consulted when choosing
   /// the SDK or workspace, including configuration that does not yet exist.
+  ///
+  /// A newly created scheduler uses [linkedSummaryCoordinator]. A supplied
+  /// [scheduler] already owns its coordinator.
   new({
     AnalysisOptionsParseSession? analysisOptionsParseSession,
     void Function(String path)? onConfigurationDependency,
@@ -62,6 +66,7 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
     String? sdkPath,
     String? sdkSummaryPath,
     AnalysisDriverScheduler? scheduler,
+    LinkedSummaryCoordinator? linkedSummaryCoordinator,
     FileContentCache? fileContentCache,
     UnlinkedUnitStore? unlinkedUnitStore,
     List<String> enabledExperiments = const [],
@@ -75,7 +80,10 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
     performanceLog ??= PerformanceLog(null);
 
     if (scheduler == null) {
-      scheduler = AnalysisDriverScheduler(performanceLog);
+      scheduler = AnalysisDriverScheduler(
+        performanceLog,
+        linkedSummaryCoordinator: linkedSummaryCoordinator,
+      );
       if (drainStreams) {
         unawaited(scheduler.events.drain<void>());
       }
@@ -109,7 +117,8 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
         analysisOptionsParseSession: analysisOptionsParseSession,
         byteStore: byteStore,
         contextRoot: root,
-        definedOptionsFile: optionsFile != null,
+        optionsFileOverride: optionsFile,
+        packageConfigOverride: packageConfigFile,
         declaredVariables: DeclaredVariables.fromMap(declaredVariables ?? {}),
         drainStreams: drainStreams,
         enableIndex: enableIndex,

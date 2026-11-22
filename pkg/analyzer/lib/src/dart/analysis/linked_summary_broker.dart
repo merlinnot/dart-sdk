@@ -103,7 +103,7 @@ final class LinkedSummaryBroker extends LinkedSummaryCoordinator {
         }
       case (SendPort reader, _ArenaDescriptor? descriptor):
         if (_pendingReaders.remove(reader) != null) {
-          reader.send(descriptor?.toMessage());
+          reader.send(descriptor?.toMessage() ?? _declinedMessage);
         }
     }
   }
