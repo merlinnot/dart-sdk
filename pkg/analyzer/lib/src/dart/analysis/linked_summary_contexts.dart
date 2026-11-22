@@ -24,6 +24,17 @@ final class SummaryProducerContexts(final String _sdk, final ByteStore _store) {
     _contexts.clear();
   }
 
+  /// Discards every configuration of [root] when a host driver is replaced.
+  Future<void> invalidateRoot(String root) async {
+    var keys = [
+      for (var MapEntry(:key, :value) in _contexts.entries)
+        if (value.scope.root == root) key,
+    ];
+    for (var key in keys) {
+      await _contexts.remove(key)!.discardCollection();
+    }
+  }
+
   /// Replaces the requesting scope's overlays with the complete snapshot in
   /// [request]. Each scope sees disk edits to files it hasn't overlaid.
   Future<({AnalysisContextCollectionImpl collection, String scopeKey})> prepare(
@@ -65,7 +76,7 @@ final class _ProducerContext(
   final _files = OverlayResourceProvider(PhysicalResourceProvider.INSTANCE);
 
   AnalysisContextCollectionImpl? _collection;
-  Set<String> _optionsDependencies = {};
+  Set<String> _configurationDependencies = {};
 
   /// Builds drivers lazily from this scope's current view of the file system.
   AnalysisContextCollectionImpl get collection =>
@@ -135,7 +146,7 @@ final class _ProducerContext(
   bool _affectsConfiguration(String file) {
     if (file == scope.packages ||
         file == scope.options ||
-        _optionsDependencies.contains(file)) {
+        _configurationDependencies.contains(file)) {
       return true;
     }
 
@@ -162,8 +173,10 @@ final class _ProducerContext(
 
   AnalysisContextCollectionImpl _createCollection() {
     var options = AnalysisOptionsParseSession();
+    var dependencies = <String>{};
     var collection = AnalysisContextCollectionImpl(
       analysisOptionsParseSession: options,
+      onConfigurationDependency: dependencies.add,
       includedPaths: [scope.root],
       resourceProvider: _files,
       sdkPath: sdk,
@@ -173,7 +186,8 @@ final class _ProducerContext(
       declaredVariables: scope.variables,
       withFineDependencies: true,
     );
-    _optionsDependencies = {for (var file in options.attemptedFiles) file.path};
+    _configurationDependencies = dependencies
+      ..addAll(options.attemptedFiles.map((file) => file.path));
 
     return collection;
   }
