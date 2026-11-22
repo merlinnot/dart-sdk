@@ -20,6 +20,7 @@ import 'file_state_test.dart' as file_state;
 import 'fletcher16_test.dart' as fletcher16_test;
 import 'index_test.dart' as index;
 import 'linked_summary_coordinator_test.dart' as linked_summary_coordinator;
+import 'linked_summary_protocol_test.dart' as linked_summary_protocol;
 import 'mapped_summary_test.dart' as mapped_summary;
 import 'referenced_names_test.dart' as referenced_names;
 import 'resolve_for_completion_test.dart' as resolve_for_completion;
@@ -50,6 +51,7 @@ main() {
     fletcher16_test.main();
     index.main();
     linked_summary_coordinator.main();
+    linked_summary_protocol.main();
     mapped_summary.main();
     referenced_names.main();
     resolve_for_completion.main();

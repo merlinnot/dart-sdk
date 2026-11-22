@@ -3,7 +3,6 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:async';
-import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -11,22 +10,10 @@ import 'dart:typed_data';
 
 import 'package:_fe_analyzer_shared/src/scanner/characters.dart' show $LF;
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
+import 'package:analyzer/src/dart/analysis/linked_summary_protocol.dart';
 import 'package:analyzer/src/dart/analysis/mapped_summary.dart';
 
 final _traceDirectory = Platform.environment['DART_ANALYZER_SUMMARY_TRACE_DIR'];
-
-String _scopeKey(
-  String root,
-  String? options,
-  String? packages,
-  Map<String, String> variables,
-) {
-  var orderedVariables = variables.length < 2
-      ? variables
-      : SplayTreeMap.of(variables);
-
-  return jsonEncode([root, options, packages, orderedVariables]);
-}
 
 void _writeTrace(String name, String contents) {
   try {
@@ -74,8 +61,10 @@ class LinkedSummaryCoordinator {
 
   /// Requests summaries for [paths] in the analysis context identified by
   /// [root], [options], [packages], and the declared [variables].
-  /// [overlays] supplies in-memory file contents and [changedFiles] identifies
-  /// files the producer needs to refresh.
+  ///
+  /// [overlays] is the complete set of unsaved file contents for this scope.
+  /// Omitting a previously overlaid path restores its on-disk contents.
+  /// Use [changedFiles] for paths the producer should reread after disk edits.
   ///
   /// With [onAvailable], each notification supplies the same [PublishedCycles]
   /// cursor so the caller can defer reading the index until its next background
@@ -97,27 +86,31 @@ class LinkedSummaryCoordinator {
       return .unavailable;
     }
 
-    var scope = _scopeKey(root, options, packages, variables);
-    var cursor = _index?.paths[scope]?.length ?? 0;
+    var scope = SummaryAnalysisScope(
+      root,
+      options: options,
+      packages: packages,
+      variables: variables,
+    );
+    var scopeKey = scope.indexKey;
+    var cursor = _index?.paths[scopeKey]?.length ?? 0;
     PublishedCycles? publication;
 
     PublishedCycles cycles(_ArenaDescriptor descriptor) =>
-        publication ??= PublishedCycles._(this, scope, descriptor, cursor);
+        publication ??= PublishedCycles._(this, scopeKey, descriptor, cursor);
 
     var reply = ReceivePort();
     _pending.add(reply);
     try {
-      _broker.send([
-        root,
-        paths,
-        options,
-        packages,
-        variables,
-        onAvailable != null,
-        overlays,
-        changedFiles,
-        reply.sendPort,
-      ]);
+      var request = SummaryRequest(
+        scope: scope,
+        paths: paths,
+        overlays: overlays,
+        changedFiles: changedFiles,
+        reply: reply.sendPort,
+        wantsProgress: onAvailable != null,
+      );
+      _broker.send(request.toMessage());
 
       // Each progress notification renews the timeout for a live producer.
       await for (var message in reply.timeout(_producerIdleTimeout)) {
