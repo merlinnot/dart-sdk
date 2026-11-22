@@ -9,6 +9,8 @@ import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/diagnostic/diagnostic.dart';
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart';
+import 'package:analyzer/src/dart/analysis/library_context.dart';
+import 'package:analyzer/src/util/performance/operation_performance.dart';
 import 'package:analyzer_testing/package_config_file_builder.dart';
 import 'package:analyzer_testing/src/expected_diagnostics.dart'
     as expected_diagnostics;
@@ -367,6 +369,70 @@ void f() {
 ''');
 
     // Lints don't affect summaries, nothing should be linked.
+    _assertNoLinkedCycles();
+  }
+
+  test_loadForResolution_cacheOnly_docImport() async {
+    useEmptyByteStore();
+    var docImport = newFile('$testPackageLibPath/doc.dart', 'class A {}');
+    addTestFile(r'''
+/// @docImport 'doc.dart';
+library;
+''');
+
+    var driver = driverFor(testFile);
+    var target = driver.fsState.getFileForPath(testFile.path).kind.library!;
+    var context = driver.libraryContext;
+    var performance = OperationPerformanceImpl('test');
+
+    expect(
+      context.load(
+        targetLibrary: target,
+        performance: performance,
+        allowLink: false,
+      ),
+      LibraryLoadResult.cacheMiss,
+    );
+    _assertNoLinkedCycles();
+
+    expect(
+      context.load(targetLibrary: target, performance: performance),
+      LibraryLoadResult.loaded,
+    );
+    _assertContainsLinkedCycle({testFile}, andClear: true);
+
+    // The target is ready, but resolving its documentation needs another cycle.
+    expect(
+      context.loadForResolution(
+        targetLibrary: target,
+        performance: performance,
+        allowLink: false,
+      ),
+      LibraryLoadResult.cacheMiss,
+    );
+    _assertNoLinkedCycles();
+
+    expect(
+      context.loadForResolution(
+        targetLibrary: target,
+        performance: performance,
+      ),
+      LibraryLoadResult.loaded,
+    );
+    _assertContainsLinkedCycle({docImport});
+
+    // A fresh context can now load both libraries from the byte store.
+    await disposeAnalysisContextCollection();
+    driver = driverFor(testFile);
+    target = driver.fsState.getFileForPath(testFile.path).kind.library!;
+    expect(
+      driver.libraryContext.loadForResolution(
+        targetLibrary: target,
+        performance: performance,
+        allowLink: false,
+      ),
+      LibraryLoadResult.loaded,
+    );
     _assertNoLinkedCycles();
   }
 

@@ -124,11 +124,18 @@ class LibraryContext {
   }
 
   /// Load data required to access elements of the given [targetLibrary].
-  void load({
+  ///
+  /// Returns [LibraryLoadResult.loaded] when the target and its dependencies
+  /// are loaded. By default, missing or stale bundles are linked. If
+  /// [allowLink] is false, stops at the first cycle that needs linking and
+  /// returns [LibraryLoadResult.cacheMiss]. Previously loaded cycles remain
+  /// available for a later attempt.
+  LibraryLoadResult load({
     required LibraryFileKind targetLibrary,
     required OperationPerformanceImpl performance,
+    bool allowLink = true,
   }) {
-    fileSystemState.withParsedUnitsForLinking(() {
+    return fileSystemState.withParsedUnitsForLinking(() {
       var libraryCycle = performance.run('libraryCycle', (performance) {
         fileSystemState.newFileOperationPerformance = performance;
         try {
@@ -139,39 +146,70 @@ class LibraryContext {
       });
 
       if (loadedBundles.contains(libraryCycle)) {
-        return;
+        return .loaded;
       }
 
-      performance.run('loadBundle', (performance) {
-        var cyclesToLoad = _collectCyclesToLoad(libraryCycle);
-        for (var cycle in cyclesToLoad) {
-          _loadBundle(cycle: cycle, performance: performance);
+      var result = performance.run('loadBundle', (performance) {
+        for (var cycle in _collectCyclesToLoad(libraryCycle)) {
+          var result = _loadBundle(
+            cycle: cycle,
+            performance: performance,
+            allowLink: allowLink,
+          );
+
+          if (result == .cacheMiss) {
+            return result;
+          }
         }
+
+        return LibraryLoadResult.loaded;
       });
 
-      // There might be a rare (and wrong) situation, when the external
-      // summaries already include the [targetLibrary]. When this happens,
-      // [loadBundle] exists without doing any work. But the type provider must
-      // be created.
-      _createElementFactoryTypeProvider();
+      if (result == .loaded) {
+        // External summaries can already contain the target. Even when no
+        // bundles needed loading, the element factory needs its type provider.
+        _createElementFactoryTypeProvider();
+      }
+
+      return result;
     });
   }
 
   /// Load data required to resolve the given [targetLibrary].
   ///
-  /// In addition to [load], this loads the libraries imported by `@docImport`s,
-  /// which are not dependencies of the library cycle, but documentation
-  /// comments are resolved against them.
-  void loadForResolution({
+  /// Returns [LibraryLoadResult.loaded] once both the target and its
+  /// `@docImport` libraries are loaded. With [allowLink] set to false,
+  /// returns [LibraryLoadResult.cacheMiss] as soon as any of them or their
+  /// dependencies need linking. By default, [load] links missing bundles.
+  LibraryLoadResult loadForResolution({
     required LibraryFileKind targetLibrary,
     required OperationPerformanceImpl performance,
+    bool allowLink = true,
   }) {
-    load(targetLibrary: targetLibrary, performance: performance);
+    var targetResult = load(
+      targetLibrary: targetLibrary,
+      performance: performance,
+      allowLink: allowLink,
+    );
 
-    performance.run('docImportedLibraries', (performance) {
-      for (var importedLibrary in targetLibrary.docImportedLibraries) {
-        load(targetLibrary: importedLibrary, performance: performance);
+    if (targetResult == .cacheMiss) {
+      return targetResult;
+    }
+
+    return performance.run('docImportedLibraries', (performance) {
+      for (var library in targetLibrary.docImportedLibraries) {
+        var result = load(
+          targetLibrary: library,
+          performance: performance,
+          allowLink: allowLink,
+        );
+
+        if (result == .cacheMiss) {
+          return result;
+        }
       }
+
+      return .loaded;
     });
   }
 
@@ -263,28 +301,26 @@ class LibraryContext {
 
   /// Load the linked bundle for [cycle], or link it if not available.
   ///
-  /// Direct dependencies must already be loaded.
-  void _loadBundle({
+  /// The cycle must be new to this context and its direct dependencies loaded.
+  LibraryLoadResult _loadBundle({
     required LibraryCycle cycle,
     required OperationPerformanceImpl performance,
+    required bool allowLink,
   }) {
-    if (!loadedBundles.add(cycle)) return;
+    assert(!loadedBundles.contains(cycle));
     addToLogRing('[load][cycle: $cycle]');
 
     performance.getDataInt('cycleCount').increment();
     performance.getDataInt('libraryCount').add(cycle.libraries.length);
 
-    var unitsInformativeBytes = <Uri, Uint8List>{};
-    for (var library in cycle.libraries) {
-      for (var file in library.files) {
-        unitsInformativeBytes[file.uri] = file.unlinked2.informativeBytes;
-      }
-    }
-
     var probe = _probeLinkedBundle(cycle: cycle, performance: performance);
     var linkedBytes = probe.linkedBytes;
 
     if (linkedBytes == null) {
+      if (!allowLink) {
+        return .cacheMiss;
+      }
+
       testData?.linkedCycles.add(
         cycle.libraries.map((e) => e.file.path).toSet(),
       );
@@ -402,8 +438,10 @@ class LibraryContext {
     } else {
       testData?.forCycle(cycle).getKeys.add(cycle.linkedKey);
       performance.getDataInt('libraryLoadCount').add(cycle.libraries.length);
+      var unitsInformativeBytes = <Uri, Uint8List>{};
       for (var library in cycle.libraries) {
         for (var file in library.files) {
+          unitsInformativeBytes[file.uri] = file.unlinked2.informativeBytes;
           file.takeParsedUnitForLinking();
         }
       }
@@ -420,6 +458,9 @@ class LibraryContext {
       elementFactory.libraryManifests.addAll(probe.libraryManifests);
       addToLogRing('[load][addedBundle][cycle: $cycle]');
     }
+    loadedBundles.add(cycle);
+
+    return .loaded;
   }
 
   /// Returns a previously linked bundle entry for [cycle] if present and
@@ -565,6 +606,15 @@ class LibraryContextTestData {
 class LibraryCycleTestData {
   final List<String> getKeys = [];
   final List<String> putKeys = [];
+}
+
+/// The outcome of loading library cycles into a [LibraryContext].
+enum LibraryLoadResult {
+  /// All requested cycles are available in the element factory.
+  loaded,
+
+  /// A required cycle has no reusable bundle and linking was disabled.
+  cacheMiss,
 }
 
 /// A bundle of linked libraries.
