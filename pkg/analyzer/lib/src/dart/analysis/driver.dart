@@ -31,6 +31,7 @@ import 'package:analyzer/src/dart/analysis/index.dart';
 import 'package:analyzer/src/dart/analysis/library_analyzer.dart';
 import 'package:analyzer/src/dart/analysis/library_context.dart';
 import 'package:analyzer/src/dart/analysis/library_diagnostics.dart';
+import 'package:analyzer/src/dart/analysis/library_graph.dart';
 import 'package:analyzer/src/dart/analysis/performance_logger.dart';
 import 'package:analyzer/src/dart/analysis/results.dart';
 import 'package:analyzer/src/dart/analysis/search.dart';
@@ -1289,6 +1290,32 @@ class AnalysisDriver {
       _analyzeFile(path);
       return;
     }
+  }
+
+  /// Produces summaries for the library containing [path] and its dependencies.
+  ///
+  /// The producer calls [onCycle] as each newly loaded cycle becomes available,
+  /// after its dependencies and before moving on to the next cycle.
+  void produceSummary(String path, void Function(LibraryCycle) onCycle) {
+    _applyPendingFileChanges();
+    _fsState.withParsedUnitsForLinking(() {
+      var kind = _fsState.getFileForPath(path).kind;
+
+      libraryContext.loadForResolution(
+        targetLibrary: kind.library ?? kind.asLibrary,
+        performance: OperationPerformanceImpl('produceSummary'),
+        onCycle: (cycle) {
+          // Later cycles record requirements against IDs. The full manifest
+          // remains available in serialized form if it needs to be compared.
+          var manifests = libraryContext.elementFactory.libraryManifests;
+          for (var uri in cycle.libraryUris) {
+            manifests[uri]?.discardInstance();
+          }
+
+          onCycle(cycle);
+        },
+      );
+    });
   }
 
   /// Remove the file with the given [path] from the list of files to analyze.
