@@ -83,6 +83,16 @@ void main() {
       });
     }
 
+    test('a second writer cannot replace an existing arena', () async {
+      await file.writeAsBytes([7]);
+
+      expect(
+        () => SummaryArenaWriter(file.path, 1),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(await file.readAsBytes(), [7]);
+    });
+
     test('append returns the offset of each write visible to readers', () {
       var writer = SummaryArenaWriter(file.path, 3);
       try {
