@@ -9,6 +9,7 @@ import 'package:analyzer/dart/analysis/declared_variables.dart';
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/file_system/physical_file_system.dart';
 import 'package:analyzer/src/analysis_options/analysis_options.dart';
+import 'package:analyzer/src/analysis_options/analysis_options_parser.dart';
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
 import 'package:analyzer/src/dart/analysis/context_builder.dart';
 import 'package:analyzer/src/dart/analysis/context_locator.dart';
@@ -36,7 +37,11 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
   final List<DriverBasedAnalysisContext> contexts = [];
 
   /// Initialize a newly created analysis context manager.
+  ///
+  /// Supply a fresh [analysisOptionsParseSession] to track the options files
+  /// read while locating roots and building their drivers.
   new({
+    AnalysisOptionsParseSession? analysisOptionsParseSession,
     ByteStore? byteStore,
     Map<String, String>? declaredVariables,
     bool drainStreams = true,
@@ -80,6 +85,7 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
     _throwIfNotAbsoluteNormalizedPath(sdkPath);
 
     var roots = locateContextRoots(
+      analysisOptionsParseSession: analysisOptionsParseSession,
       includedPaths: includedPaths,
       excludedPaths: excludedPaths,
       resourceProvider: this.resourceProvider,
@@ -95,6 +101,7 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
 
     for (var root in roots) {
       var context = contextBuilder.createContext(
+        analysisOptionsParseSession: analysisOptionsParseSession,
         byteStore: byteStore,
         contextRoot: root,
         definedOptionsFile: optionsFile != null,

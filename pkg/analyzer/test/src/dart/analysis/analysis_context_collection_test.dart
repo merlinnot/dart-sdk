@@ -7,6 +7,7 @@ import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/analysis_options/analysis_options.dart';
+import 'package:analyzer/src/analysis_options/analysis_options_parser.dart';
 import 'package:analyzer/src/dart/analysis/analysis_context_collection.dart';
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
 import 'package:analyzer/src/dart/analysis/driver_based_analysis_context.dart';
@@ -108,6 +109,23 @@ linter:
       analysisOptions.lintRules.map((e) => e.name),
       unorderedEquals(['empty_statements', 'unnecessary_parenthesis']),
     );
+  }
+
+  test_new_analysisOptions_inputs() async {
+    var root = newFolder('/home/test');
+    var options = newAnalysisOptionsYamlFile(root.path, 'include: shared.yaml');
+    var shared = newFile('${root.path}/shared.yaml', 'include: missing.yaml');
+    var missing = getFile('${root.path}/missing.yaml');
+    var session = AnalysisOptionsParseSession();
+    var collection = AnalysisContextCollectionImpl(
+      analysisOptionsParseSession: session,
+      includedPaths: [root.path],
+      resourceProvider: resourceProvider,
+      sdkPath: sdkRoot.path,
+    );
+    addTearDown(collection.dispose);
+
+    expect(session.filesRead, unorderedEquals([options, shared, missing]));
   }
 
   test_new_analysisOptions_lintRules() {

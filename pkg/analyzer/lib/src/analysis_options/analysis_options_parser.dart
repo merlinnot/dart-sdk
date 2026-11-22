@@ -69,6 +69,9 @@ final class AnalysisOptionsParseSession {
   final Map<({SourceFactory sourceFactory, File file}), _FileNode> _fileNodes =
       {};
 
+  /// Options files read or attempted during parsing, including transitive includes.
+  Iterable<File> get filesRead => _fileContents.keys;
+
   /// Parses [file] and reports diagnostics for the same file graph.
   ///
   /// This is the production boundary for callers that need the effective

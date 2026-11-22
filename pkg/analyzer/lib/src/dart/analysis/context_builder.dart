@@ -71,6 +71,7 @@ class ContextBuilderImpl {
   /// If an [sdkSummaryPath] is provided, then that file will be used as the
   /// summary file for the SDK.
   DriverBasedAnalysisContext createContext({
+    AnalysisOptionsParseSession? analysisOptionsParseSession,
     ByteStore? byteStore,
     required ContextRootImpl contextRoot,
     bool definedOptionsFile = false,
@@ -126,7 +127,7 @@ class ContextBuilderImpl {
 
     var optionsFile = contextRoot.optionsFile;
     var sourceFactory = workspace.createSourceFactory(sdk, summaryData);
-    var analysisOptionsParseSession = AnalysisOptionsParseSession();
+    analysisOptionsParseSession ??= AnalysisOptionsParseSession();
 
     // Applies the client's settings to analysis options. Every
     // `AnalysisOptionsImpl` of the context goes through this function once:
