@@ -43,6 +43,9 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
   /// discovery and driver creation attempt to read when parsing options.
   /// [onConfigurationDependency] also reports paths consulted when choosing
   /// the SDK or workspace, including configuration that does not yet exist.
+  ///
+  /// A newly created scheduler uses [linkedSummaryCoordinator]. A supplied
+  /// [scheduler] already owns its coordinator.
   new({
     AnalysisOptionsParseSession? analysisOptionsParseSession,
     void Function(String path)? onConfigurationDependency,

@@ -160,8 +160,7 @@ class ContextBuilderImpl {
     }
 
     AnalysisOptionsMap analysisOptionsMap;
-    // If there's an options file defined (as, e.g. passed into the
-    // AnalysisContextCollection), use a shared options map based on it.
+    // An explicit options file applies to every file in the context.
     if (optionsFileOverride != null && optionsFile != null) {
       analysisOptionsMap = AnalysisOptionsMap.forSharedOptions(
         _getAnalysisOptions(

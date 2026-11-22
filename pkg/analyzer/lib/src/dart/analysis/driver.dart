@@ -54,6 +54,7 @@ import 'package:analyzer/src/fine/requirements.dart';
 import 'package:analyzer/src/generated/engine.dart'
     show AnalysisContext, AnalysisEngine;
 import 'package:analyzer/src/generated/source.dart' show SourceFactory;
+import 'package:analyzer/src/generated/utilities_collection.dart' show EnumSet;
 import 'package:analyzer/src/lint/registry.dart' as linter;
 import 'package:analyzer/src/summary/api_signature.dart';
 import 'package:analyzer/src/summary/format.dart';
@@ -118,6 +119,9 @@ testFineAfterLibraryAnalyzerHook;
 class AnalysisDriver {
   /// The version of data format, should be incremented on every format change.
   static const int DATA_VERSION = 766;
+
+  static const _backgroundSummaryBatchSize = 16;
+  static const _editorIdleDelay = Duration(milliseconds: 100);
 
   /// The signature of the numbering of token types.
   ///
@@ -314,22 +318,24 @@ class AnalysisDriver {
   /// Whether timing data should be gathered during lint rule execution.
   final bool _enableLintRuleTiming;
 
-  bool _waitingForLinkedSummary = false;
-  Timer? _editorIdleTimer;
-  final _readySummaryPaths = Queue<String>();
-  PublishedCycles? _publishedCycles;
-
-  LinkedSummaryCoordinator? _summaryCoordinator;
-
-  // Reproduce the host's explicit overrides. Paths discovered by the host
-  // must be discovered again so nested options and packages remain visible.
+  // Explicit overrides must reach the producer. Discovered paths must be
+  // rediscovered there so nested packages and analysis options remain visible.
   final String? _optionsFileOverride;
   final String? _packageConfigOverride;
 
-  bool _waitingForEditorSummary = false;
+  LinkedSummaryCoordinator? _summaryCoordinator;
+
+  // An editor request can run while a background batch is waiting.
+  var _pendingSummaryRequests = EnumSet<_SummaryRequestKind>.empty();
+  Timer? _editorIdleTimer;
+
+  // A file edit starts a new generation. Late replies belong to the old one.
   int _summaryGeneration = 0;
   final _changedSummaryFiles = <String>{};
   final _preparedPaths = <String>{};
+
+  PublishedCycles? _publishedCycles;
+  final _readySummaryPaths = Queue<String>();
 
   /// Create a new instance of [AnalysisDriver].
   ///
@@ -375,19 +381,15 @@ class AnalysisDriver {
          sdkLanguageVersion: _sourceFactory.dartSdk!.languageVersion,
        ) {
     var coordinator = _scheduler.linkedSummaryCoordinator;
-    if (coordinator != null &&
-        withFineDependencies &&
-        analysisContext != null &&
-        _externalSummaries == null &&
-        _languageVersionOverride == null &&
-        resourceProvider.physicalStateProvider != null) {
+    if (coordinator != null && _supportsSharedSummaries) {
       if (coordinator.wrapIfSupported(byteStore) case var sharedStore?) {
         byteStore = sharedStore;
         _summaryCoordinator = coordinator;
       }
     }
+
     _byteStore = byteStore;
-    // The index is built after linking. Both consumers can share unlinked units.
+    // Both consumers can share unlinked units. Indexing happens after linking.
     _saltForUnlinked = _calculateSaltForUnlinked(
       enableIndex: _summaryCoordinator == null && enableIndex,
       sdkLanguageVersion: _sourceFactory.dartSdk!.languageVersion,
@@ -522,7 +524,11 @@ class AnalysisDriver {
     if (_disposeRequests.isNotEmpty) {
       return AnalysisDriverPriority.interactive;
     }
-    if (_waitingForEditorSummary) return AnalysisDriverPriority.nothing;
+
+    if (_pendingSummaryRequests[.singleFile]) {
+      return AnalysisDriverPriority.nothing;
+    }
+
     if (_resolveForCompletionRequests.isNotEmpty) {
       return AnalysisDriverPriority.completion;
     }
@@ -567,10 +573,15 @@ class AnalysisDriver {
     if (_fileTracker.hasChangedFiles) {
       return AnalysisDriverPriority.changedFiles;
     }
+
     if (_publishedCycles != null || _readySummaryPaths.isNotEmpty) {
       return AnalysisDriverPriority.general;
     }
-    if (_waitingForLinkedSummary) return AnalysisDriverPriority.nothing;
+
+    if (_pendingSummaryRequests[.backgroundBatch]) {
+      return AnalysisDriverPriority.nothing;
+    }
+
     if (_fileTracker.hasPendingChangedFiles) {
       return AnalysisDriverPriority.generalChanged;
     }
@@ -609,6 +620,13 @@ class AnalysisDriver {
   bool get _hasPendingAvailableFilesDiscovery {
     return _discoverAvailableFilesTask?.hasPendingWork ?? false;
   }
+
+  bool get _supportsSharedSummaries =>
+      withFineDependencies &&
+      analysisContext != null &&
+      _externalSummaries == null &&
+      _languageVersionOverride == null &&
+      _resourceProvider.physicalStateProvider != null;
 
   /// Add the file with the given [path] to the set of files that are explicitly
   /// being analyzed.
@@ -800,6 +818,7 @@ class AnalysisDriver {
   Future<void> dispose2() {
     var completer = Completer<void>();
     _disposed = true;
+
     // A replacement driver starts with no pending file changes. Its first
     // request must rediscover configuration, even if this driver fell back.
     if (analysisContext != null) {
@@ -1258,7 +1277,10 @@ class AnalysisDriver {
     _discoverLibraries();
 
     if (_resolveForCompletionRequests.lastOrNull case var request?) {
-      if (_requestSummaries(request.path, interactive: true)) return;
+      if (_deferForSummaries(request.path, .singleFile)) {
+        return;
+      }
+
       _resolveForCompletionRequests.removeLast();
       try {
         var result = _resolveForCompletion(request);
@@ -1272,25 +1294,23 @@ class AnalysisDriver {
       return;
     }
 
-    // Analyze a requested file.
-    if (_performFileRequest(_requestedFiles.firstKey, _analyzeFile)) return;
-
-    // Analyze a requested library.
-    if (_performFileRequest(
-      _requestedLibraries.firstKey,
-      _getResolvedLibrary,
-    )) {
+    if (_handleFileRequest(_requestedFiles.firstKey, _analyzeFile)) {
       return;
     }
 
-    // Process an error request.
-    if (_performFileRequest(_errorsRequestedFiles.firstKey, _getErrors)) return;
+    if (_handleFileRequest(_requestedLibraries.firstKey, _getResolvedLibrary)) {
+      return;
+    }
 
-    // Process an index request.
-    if (_performFileRequest(_indexRequestedFiles.firstKey, _getIndex)) return;
+    if (_handleFileRequest(_errorsRequestedFiles.firstKey, _getErrors)) {
+      return;
+    }
 
-    // Process a unit element request.
-    if (_performFileRequest(
+    if (_handleFileRequest(_indexRequestedFiles.firstKey, _getIndex)) {
+      return;
+    }
+
+    if (_handleFileRequest(
       _unitElementRequestedFiles.firstKey,
       _getUnitElement,
     )) {
@@ -1318,42 +1338,29 @@ class AnalysisDriver {
     }
 
     // Analyze a priority file.
-    if (_performFileRequest(
+    if (_handleFileRequest(
       _priorityFiles.firstWhereOrNull(_fileTracker.isFilePending),
       _analyzeFile,
     )) {
       return;
     }
 
-    if (_publishedCycles case var published?) {
-      _publishedCycles = null;
-      _readySummaryPaths.addAll(
-        published.takePaths().where(_fileTracker.isFilePending),
-      );
-    }
-    while (_readySummaryPaths.isNotEmpty) {
-      var ready = _readySummaryPaths.removeFirst();
-      if (_fileTracker.isFilePending(ready)) {
-        _produceErrors(ready);
-        return;
-      }
-    }
-
-    // Analyze a general file.
-    if (_fileTracker.pendingFilesInAnalysisOrder.firstOrNull case var path?
-        when !_waitingForLinkedSummary) {
-      if (_requestSummaries(path, interactive: false)) return;
+    if (_takePublishedPath() case var path?) {
       _produceErrors(path);
       return;
     }
 
-    // Analyze a requested - but not interactivly requested - file.
-    if (_performFileRequest(
-      _requestedFilesNonInteractive.firstKey,
-      _analyzeFile,
-    )) {
+    if (!_pendingSummaryRequests[.backgroundBatch] &&
+        _handleFileRequest(
+          _fileTracker.pendingFilesInAnalysisOrder.firstOrNull,
+          _produceErrors,
+          kind: .backgroundBatch,
+        )) {
       return;
     }
+
+    // Explicit non-interactive work runs after pending background files.
+    _handleFileRequest(_requestedFilesNonInteractive.firstKey, _analyzeFile);
   }
 
   /// Produces summaries for the library containing [path] and its dependencies.
@@ -1675,23 +1682,9 @@ class AnalysisDriver {
     if (_pendingFileChanges.any(
       (change) => change.kind != FileChangeKind.add,
     )) {
-      if (_summaryCoordinator != null && _priorityFiles.isNotEmpty) {
-        // Consecutive edits can briefly drain the request queue. Reclaim
-        // decoded manifests once the open document has actually been idle.
-        _editorIdleTimer?.cancel();
-        _editorIdleTimer = Timer(const Duration(milliseconds: 100), () {
-          _editorIdleTimer = null;
-          _scheduler.notify();
-        });
-      }
-      if (_summaryCoordinator != null) {
-        _summaryGeneration++;
-        _preparedPaths.clear();
-        _changedSummaryFiles.addAll(_pendingFileChanges.map((c) => c.path));
-      }
-      _publishedCycles = null;
-      _readySummaryPaths.clear();
+      _invalidatePreparedSummaries();
     }
+
     var accumulatedAffected = <String>{};
     for (var fileChange in _pendingFileChanges) {
       var path = fileChange.path;
@@ -1844,11 +1837,43 @@ class AnalysisDriver {
     );
   }
 
+  /// Returns whether [path] should stay queued until the producer replies.
+  bool _deferForSummaries(String path, _SummaryRequestKind kind) {
+    var coordinator = _summaryCoordinator;
+
+    if (coordinator == null || _preparedPaths.contains(path)) {
+      return false;
+    }
+
+    // Single-file requests probe the cache first. Background batches also probe
+    // while the editor has priority files.
+    if ((kind == .singleFile || _priorityFiles.isNotEmpty) &&
+        _loadCachedSummaries(path) == .loaded) {
+      return false;
+    }
+
+    var paths = [
+      path,
+      if (kind == .backgroundBatch)
+        ..._fileTracker.pendingFilesInAnalysisOrder
+            .where(
+              (pending) => pending != path && !_preparedPaths.contains(pending),
+            )
+            .take(_backgroundSummaryBatchSize - 1),
+    ];
+    unawaited(_prepareSummaries(coordinator, kind, paths));
+
+    return true;
+  }
+
   /// Like [discardMemoryExpensiveData], but keeps decoded data that the
   /// analysis keeps using. The scheduler invokes it once after each period
   /// of work of this driver.
   void _discardMemoryExpensiveDataOnIdle() {
-    if (_hasDiscardedMemoryExpensiveData) {
+    if (_hasDiscardedMemoryExpensiveData ||
+        _pendingSummaryRequests[.singleFile] ||
+        _pendingSummaryRequests[.backgroundBatch] ||
+        _editorIdleTimer != null) {
       return;
     }
     _hasDiscardedMemoryExpensiveData = true;
@@ -2226,6 +2251,48 @@ class AnalysisDriver {
     });
   }
 
+  /// Returns whether there was a file to handle on this turn.
+  /// A file waiting for summaries stays queued for a later turn.
+  bool _handleFileRequest(
+    String? path,
+    void Function(String) perform, {
+    _SummaryRequestKind kind = .singleFile,
+  }) {
+    if (path == null) {
+      return false;
+    }
+
+    if (!_deferForSummaries(path, kind)) {
+      perform(path);
+    }
+
+    return true;
+  }
+
+  void _invalidatePreparedSummaries() {
+    _publishedCycles = null;
+    _readySummaryPaths.clear();
+
+    if (_summaryCoordinator == null) {
+      return;
+    }
+
+    _summaryGeneration++;
+    _preparedPaths.clear();
+    _changedSummaryFiles.addAll(
+      _pendingFileChanges.map((change) => change.path),
+    );
+
+    // An empty queue between keystrokes doesn't mean the editor is idle.
+    if (_priorityFiles.isNotEmpty) {
+      _editorIdleTimer?.cancel();
+      _editorIdleTimer = Timer(_editorIdleDelay, () {
+        _editorIdleTimer = null;
+        _scheduler.notify();
+      });
+    }
+  }
+
   bool _isAbsolutePath(String path) {
     return _resourceProvider.pathContext.isAbsolute(path);
   }
@@ -2237,6 +2304,16 @@ class AnalysisDriver {
       }
     }
     return false;
+  }
+
+  LibraryLoadResult _loadCachedSummaries(String path) {
+    var kind = _fsState.getFileForPath(path).kind;
+
+    return libraryContext.loadForResolution(
+      targetLibrary: kind.library ?? kind.asLibrary,
+      performance: OperationPerformanceImpl('readPublishedSummary'),
+      allowLink: false,
+    );
   }
 
   Future<void> _maybeDispose() async {
@@ -2261,10 +2338,50 @@ class AnalysisDriver {
     }
   }
 
-  bool _performFileRequest(String? path, void Function(String) perform) {
-    if (path == null) return false;
-    if (!_requestSummaries(path, interactive: true)) perform(path);
-    return true;
+  Future<void> _prepareSummaries(
+    LinkedSummaryCoordinator coordinator,
+    _SummaryRequestKind kind,
+    List<String> paths,
+  ) async {
+    var generation = _summaryGeneration;
+    var changedFiles = _changedSummaryFiles.toList();
+    _changedSummaryFiles.clear();
+    _pendingSummaryRequests = _pendingSummaryRequests.updated(kind, true);
+
+    void onAvailable(PublishedCycles published) {
+      if (generation == _summaryGeneration) {
+        _publishedCycles = published;
+        _scheduler.notify();
+      }
+    }
+
+    var result = await coordinator.prepare(
+      root: name,
+      paths: paths,
+      options: _optionsFileOverride,
+      packages: _packageConfigOverride,
+      variables: {
+        for (var key in declaredVariables.variableNames)
+          key: declaredVariables.get(key)!,
+      },
+      overlays: switch (resourceProvider) {
+        OverlayResourceProvider(:var overlayContents) => overlayContents,
+        _ => const {},
+      },
+      changedFiles: changedFiles,
+      onAvailable: kind == .backgroundBatch ? onAvailable : null,
+    );
+    _pendingSummaryRequests = _pendingSummaryRequests.updated(kind, false);
+
+    if (generation == _summaryGeneration) {
+      _preparedPaths.addAll(paths);
+
+      if (result == .unavailable) {
+        _summaryCoordinator = null;
+      }
+    }
+
+    _scheduler.notify();
   }
 
   void _produceErrors(String path) {
@@ -2464,77 +2581,6 @@ class AnalysisDriver {
     );
   }
 
-  bool _requestSummaries(String path, {required bool interactive}) {
-    var coordinator = _summaryCoordinator;
-    if (coordinator == null || _preparedPaths.contains(path)) return false;
-    if (interactive || _priorityFiles.isNotEmpty) {
-      var kind = _fsState.getFileForPath(path).kind;
-      var result = libraryContext.loadForResolution(
-        targetLibrary: kind.library ?? kind.asLibrary,
-        performance: OperationPerformanceImpl('readPublishedSummary'),
-        allowLink: false,
-      );
-
-      if (result == .loaded) {
-        return false;
-      }
-    }
-    var paths = [
-      path,
-      if (!interactive)
-        ..._fileTracker.pendingFilesInAnalysisOrder
-            .where((p) => p != path && !_preparedPaths.contains(p))
-            .take(15),
-    ];
-    var generation = _summaryGeneration;
-    var changed = _changedSummaryFiles.toList();
-    _changedSummaryFiles.clear();
-    if (interactive) {
-      _waitingForEditorSummary = true;
-    } else {
-      _waitingForLinkedSummary = true;
-    }
-    unawaited(
-      coordinator
-          .prepare(
-            root: name,
-            paths: paths,
-            options: _optionsFileOverride,
-            packages: _packageConfigOverride,
-            variables: {
-              for (var key in declaredVariables.variableNames)
-                key: declaredVariables.get(key)!,
-            },
-            overlays: switch (resourceProvider) {
-              OverlayResourceProvider provider => provider.overlayContents,
-              _ => const {},
-            },
-            changedFiles: changed,
-            onAvailable: interactive
-                ? null
-                : (published) {
-                    if (generation == _summaryGeneration) {
-                      _publishedCycles = published;
-                      scheduler.notify();
-                    }
-                  },
-          )
-          .then((result) {
-            if (interactive) {
-              _waitingForEditorSummary = false;
-            } else {
-              _waitingForLinkedSummary = false;
-            }
-            if (generation == _summaryGeneration) {
-              _preparedPaths.addAll(paths);
-              if (result == .unavailable) _summaryCoordinator = null;
-            }
-            scheduler.notify();
-          }),
-    );
-    return true;
-  }
-
   void _resetAvailableFilesDiscovery() {
     var task = _discoverAvailableFilesTask;
     if (task == null) {
@@ -2677,6 +2723,26 @@ class AnalysisDriver {
     }
   }
 
+  /// Takes one pending file whose dependency cycle is ready to read.
+  String? _takePublishedPath() {
+    if (_publishedCycles case var published?) {
+      _publishedCycles = null;
+      _readySummaryPaths.addAll(
+        published.takePaths().where(_fileTracker.isFilePending),
+      );
+    }
+
+    while (_readySummaryPaths.isNotEmpty) {
+      var path = _readySummaryPaths.removeFirst();
+
+      if (_fileTracker.isFilePending(path)) {
+        return path;
+      }
+    }
+
+    return null;
+  }
+
   /// The driver supports only absolute paths, this method is used to validate
   /// any input paths to prevent errors later.
   void _throwIfNotAbsolutePath(String path) {
@@ -2797,7 +2863,7 @@ class AnalysisDriverScheduler {
   /// by one, without big chunks of work in form of added files.
   final bool shouldDiscardMemoryExpensiveDataOnIdle;
 
-  /// Optional coordinator for background linked-summary misses.
+  /// Prepares missing linked summaries for drivers that can share them.
   final LinkedSummaryCoordinator? linkedSummaryCoordinator;
 
   /// The controller for [events] stream.
@@ -2985,9 +3051,6 @@ class AnalysisDriverScheduler {
         }
         if (priority == AnalysisDriverPriority.nothing) {
           if (driver.withFineDependencies &&
-              !driver._waitingForLinkedSummary &&
-              !driver._waitingForEditorSummary &&
-              driver._editorIdleTimer == null &&
               shouldDiscardMemoryExpensiveDataOnIdle) {
             driver._discardMemoryExpensiveDataOnIdle();
           }
@@ -3564,6 +3627,8 @@ class _ResolveForCompletionRequest {
     required this.performance,
   });
 }
+
+enum _SummaryRequestKind { singleFile, backgroundBatch }
 
 extension<K, V> on Map<K, List<Completer<V>>> {
   void completeAll(K key, V value) {

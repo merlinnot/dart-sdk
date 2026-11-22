@@ -390,13 +390,19 @@ abstract class _TimingResource implements Resource {
 }
 
 extension ResourceProviderBacking on ResourceProvider {
-  /// The physical provider used for shared state, preserving I/O timing.
+  /// The on-disk provider beneath any editor overlays, retaining its I/O timer.
   ResourceProvider? get physicalStateProvider {
-    ResourceProvider provider = this;
-    if (provider is OverlayResourceProvider) provider = provider.baseProvider;
-    var base = provider is TimingResourceProvider
-        ? provider.baseProvider
-        : provider;
-    return base is PhysicalResourceProvider ? provider : null;
+    var provider = switch (this) {
+      OverlayResourceProvider(:var baseProvider) => baseProvider,
+      _ => this,
+    };
+
+    return switch (provider) {
+      PhysicalResourceProvider() ||
+      TimingResourceProvider(
+        baseProvider: PhysicalResourceProvider(),
+      ) => provider,
+      _ => null,
+    };
   }
 }
