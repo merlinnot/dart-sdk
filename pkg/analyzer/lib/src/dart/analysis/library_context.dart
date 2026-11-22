@@ -129,41 +129,37 @@ class LibraryContext {
   /// are loaded. By default, missing or stale bundles are linked. If
   /// [allowLink] is false, stops at the first cycle that needs linking and
   /// returns [LibraryLoadResult.cacheMiss]. Previously loaded cycles remain
-  /// available for a later attempt.
+  /// available for a later attempt. [onCycle] is called after each newly
+  /// loaded cycle, in dependency order.
   LibraryLoadResult load({
     required LibraryFileKind targetLibrary,
     required OperationPerformanceImpl performance,
     bool allowLink = true,
+    void Function(LibraryCycle)? onCycle,
   }) {
     return fileSystemState.withParsedUnitsForLinking(() {
+      LibraryLoadResult loadCycle(LibraryCycle cycle) =>
+          _loadCycleWithDependencies(
+            cycle: cycle,
+            allowLink: allowLink,
+            onCycle: onCycle,
+            performance: performance,
+          );
+
       var libraryCycle = performance.run('libraryCycle', (performance) {
         fileSystemState.newFileOperationPerformance = performance;
         try {
-          return targetLibrary.libraryCycle;
+          // Link completed components while discovering the graph. Their
+          // parsed units can then be reclaimed before exploring the next branch.
+          return targetLibrary.computeLibraryCycle(
+            onComputed: onCycle != null && allowLink ? loadCycle : null,
+          );
         } finally {
           fileSystemState.newFileOperationPerformance = null;
         }
       });
 
-      if (loadedBundles.contains(libraryCycle)) {
-        return .loaded;
-      }
-
-      var result = performance.run('loadBundle', (performance) {
-        for (var cycle in _collectCyclesToLoad(libraryCycle)) {
-          var result = _loadBundle(
-            cycle: cycle,
-            performance: performance,
-            allowLink: allowLink,
-          );
-
-          if (result == .cacheMiss) {
-            return result;
-          }
-        }
-
-        return LibraryLoadResult.loaded;
-      });
+      var result = loadCycle(libraryCycle);
 
       if (result == .loaded) {
         // External summaries can already contain the target. Even when no
@@ -181,15 +177,18 @@ class LibraryContext {
   /// `@docImport` libraries are loaded. With [allowLink] set to false,
   /// returns [LibraryLoadResult.cacheMiss] as soon as any of them or their
   /// dependencies need linking. By default, [load] links missing bundles.
+  /// [onCycle] receives newly loaded cycles for the target and its doc imports.
   LibraryLoadResult loadForResolution({
     required LibraryFileKind targetLibrary,
     required OperationPerformanceImpl performance,
     bool allowLink = true,
+    void Function(LibraryCycle)? onCycle,
   }) {
     var targetResult = load(
       targetLibrary: targetLibrary,
       performance: performance,
       allowLink: allowLink,
+      onCycle: onCycle,
     );
 
     if (targetResult == .cacheMiss) {
@@ -202,6 +201,7 @@ class LibraryContext {
           targetLibrary: library,
           performance: performance,
           allowLink: allowLink,
+          onCycle: onCycle,
         );
 
         if (result == .cacheMiss) {
@@ -245,6 +245,34 @@ class LibraryContext {
     loadedBundles.clear();
 
     return keySet;
+  }
+
+  /// Attaches [resolutionBytes] for lazy loading and releases parsed units
+  /// retained for linking [cycle].
+  void _attachBundle({
+    required LibraryCycle cycle,
+    required Uint8List resolutionBytes,
+    required Map<Uri, LibraryManifestHandle> manifests,
+    required OperationPerformanceImpl performance,
+  }) {
+    var unitsInformativeBytes = <Uri, Uint8List>{};
+    for (var library in cycle.libraries) {
+      for (var file in library.files) {
+        file.takeParsedUnitForLinking();
+        unitsInformativeBytes[file.uri] = file.unlinked2.informativeBytes;
+      }
+    }
+
+    var bundleReader = performance.run('bundleReader', (performance) {
+      return BundleReader(
+        elementFactory: elementFactory,
+        unitsInformativeBytes: unitsInformativeBytes,
+        resolutionBytes: resolutionBytes,
+        libraryManifests: manifests,
+      );
+    });
+    elementFactory.addBundle(bundleReader);
+    elementFactory.libraryManifests.addAll(manifests);
   }
 
   /// Returns not yet loaded cycles starting from [root] in post-order, so
@@ -299,13 +327,99 @@ class LibraryContext {
     }
   }
 
+  /// Links [cycle] and writes its reusable bundle. With fine dependencies,
+  /// also returns the requirements recorded while linking.
+  (_LinkedBundleCacheEntry, RequirementsManifest?) _linkAndCacheBundle({
+    required LibraryCycle cycle,
+    required Map<Uri, LibraryManifestHandle> previousManifests,
+    required OperationPerformanceImpl performance,
+  }) {
+    Uint8List linkLibraries() => performance.run(
+      'link',
+      (performance) => link(
+        elementFactory: elementFactory,
+        apiSignature: cycle.nonTransitiveApiSignature,
+        performance: performance,
+        inputLibraries: cycle.libraries,
+      ).resolutionBytes,
+    );
+
+    var requirements = RequirementsManifest();
+    Map<Uri, LibraryManifestHandle> manifests = const {};
+    Uint8List resolutionBytes;
+
+    if (withFineDependencies) {
+      globalResultRequirements = requirements;
+      try {
+        resolutionBytes = linkLibraries();
+        manifests = performance.run('computeManifests', (performance) {
+          var inputManifests = performance.run('inputManifests', (_) {
+            return previousManifests.mapValue((handle) => handle.instance);
+          });
+
+          return LibraryManifestBuilder(
+            elementFactory: elementFactory,
+            inputLibraries: cycle.libraries,
+            inputManifests: inputManifests,
+          ).computeManifests(performance: performance);
+        });
+        elementFactory.libraryManifests.addAll(manifests);
+        requirements.addExports(
+          elementFactory: elementFactory,
+          libraryUriSet: cycle.libraryUris,
+        );
+      } finally {
+        try {
+          requirements.stopRecording();
+        } finally {
+          globalResultRequirements = null;
+        }
+      }
+
+      requirements.removeReqForLibs(cycle.libraryUris);
+      assert(requirements.assertSerialization());
+    } else {
+      resolutionBytes = linkLibraries();
+    }
+
+    var entry = _LinkedBundleCacheEntry(
+      nonTransitiveApiSignature: cycle.nonTransitiveApiSignature,
+      id: ManifestItemId.generate(),
+      requirementsBytes: requirements.toBytes(),
+      libraryManifests: manifests,
+      linkedBytes: resolutionBytes,
+    );
+    performance.run('writeCacheEntry', (performance) {
+      entry.write(
+        byteStore: byteStore,
+        key: cycle.linkedKey,
+        performance: performance,
+      );
+
+      if (withFineDependencies) {
+        _LinkedBundleCacheEntry.writeDigest(
+          byteStore: byteStore,
+          elementFactory: elementFactory,
+          bundleKey: cycle.linkedKey,
+          bundleId: entry.id,
+          requirements: requirements,
+        );
+      } else {
+        testData?.forCycle(cycle).putKeys.add(cycle.linkedKey);
+      }
+    });
+
+    return (entry, withFineDependencies ? requirements : null);
+  }
+
   /// Load the linked bundle for [cycle], or link it if not available.
   ///
   /// The cycle must be new to this context and its direct dependencies loaded.
   LibraryLoadResult _loadBundle({
     required LibraryCycle cycle,
-    required OperationPerformanceImpl performance,
     required bool allowLink,
+    required void Function(LibraryCycle)? onCycle,
+    required OperationPerformanceImpl performance,
   }) {
     assert(!loadedBundles.contains(cycle));
     addToLogRing('[load][cycle: $cycle]');
@@ -325,142 +439,89 @@ class LibraryContext {
         cycle.libraries.map((e) => e.file.path).toSet(),
       );
 
-      Uint8List newLinkedBytes;
       try {
-        if (withFineDependencies) {
-          var requirements = RequirementsManifest();
-          globalResultRequirements = requirements;
+        var (entry, requirements) = _linkAndCacheBundle(
+          cycle: cycle,
+          previousManifests: probe.libraryManifests,
+          performance: performance,
+        );
 
-          var linkResult = performance.run('link', (performance) {
-            return link(
-              elementFactory: elementFactory,
-              apiSignature: cycle.nonTransitiveApiSignature,
-              performance: performance,
-              inputLibraries: cycle.libraries,
-            );
-          });
-          newLinkedBytes = linkResult.resolutionBytes;
-
-          var newLibraryManifests = <Uri, LibraryManifestHandle>{};
-          performance.run('computeManifests', (performance) {
-            var inputManifests = performance.run('inputManifests', (_) {
-              return probe.libraryManifests.mapValue((h) => h.instance);
-            });
-            newLibraryManifests = LibraryManifestBuilder(
-              elementFactory: elementFactory,
-              inputLibraries: cycle.libraries,
-              inputManifests: inputManifests,
-            ).computeManifests(performance: performance);
-            elementFactory.libraryManifests.addAll(newLibraryManifests);
-          });
-
-          requirements.addExports(
-            elementFactory: elementFactory,
-            libraryUriSet: cycle.libraryUris,
-          );
-          globalResultRequirements?.stopRecording();
-          globalResultRequirements = null;
-          requirements.removeReqForLibs(cycle.libraryUris);
-          assert(requirements.assertSerialization());
-
-          var bundleId = ManifestItemId.generate();
-          var newEntry = _LinkedBundleCacheEntry(
-            nonTransitiveApiSignature: cycle.nonTransitiveApiSignature,
-            id: bundleId,
-            requirementsBytes: requirements.toBytes(),
-            libraryManifests: newLibraryManifests,
-            linkedBytes: newLinkedBytes,
-          );
-
-          performance.run('writeCacheEntry', (performance) {
-            newEntry.write(
-              byteStore: byteStore,
-              key: cycle.linkedKey,
-              performance: performance,
-            );
-            _LinkedBundleCacheEntry.writeDigest(
-              byteStore: byteStore,
-              elementFactory: elementFactory,
-              bundleKey: cycle.linkedKey,
-              bundleId: bundleId,
-              requirements: requirements,
-            );
-          });
-
-          eventsController?.add(
-            LinkLibraryCycle(
-              elementFactory: elementFactory,
-              cycle: cycle,
-              requirements: requirements,
-            ),
-          );
-        } else {
-          var linkResult = performance.run('link', (performance) {
-            return link(
-              elementFactory: elementFactory,
-              apiSignature: cycle.nonTransitiveApiSignature,
-              performance: performance,
-              inputLibraries: cycle.libraries,
-            );
-          });
-          newLinkedBytes = linkResult.resolutionBytes;
-
-          var requirements = RequirementsManifest();
-          var bundleId = ManifestItemId.generate();
-          var newEntry = _LinkedBundleCacheEntry(
-            nonTransitiveApiSignature: cycle.nonTransitiveApiSignature,
-            id: bundleId,
-            requirementsBytes: requirements.toBytes(),
-            libraryManifests: {},
-            linkedBytes: newLinkedBytes,
-          );
-
-          performance.run('writeCacheEntry', (performance) {
-            newEntry.write(
-              byteStore: byteStore,
-              key: cycle.linkedKey,
-              performance: performance,
-            );
-            testData?.forCycle(cycle).putKeys.add(cycle.linkedKey);
-          });
-
-          eventsController?.add(
-            LinkLibraryCycle(
-              elementFactory: elementFactory,
-              cycle: cycle,
-              requirements: null,
-            ),
+        // The producer can release the freshly linked elements. Subsequent
+        // cycles read what they need from the serialized bundle.
+        if (onCycle != null) {
+          elementFactory.removeBundle(cycle.libraryUris);
+          _attachBundle(
+            cycle: cycle,
+            resolutionBytes: entry.linkedBytes,
+            manifests: entry.libraryManifests,
+            performance: performance,
           );
         }
+
+        eventsController?.add(
+          LinkLibraryCycle(
+            elementFactory: elementFactory,
+            cycle: cycle,
+            requirements: requirements,
+          ),
+        );
       } catch (exception, stackTrace) {
         _throwLibraryCycleLinkException(cycle, exception, stackTrace);
       }
     } else {
       testData?.forCycle(cycle).getKeys.add(cycle.linkedKey);
       performance.getDataInt('libraryLoadCount').add(cycle.libraries.length);
-      var unitsInformativeBytes = <Uri, Uint8List>{};
-      for (var library in cycle.libraries) {
-        for (var file in library.files) {
-          unitsInformativeBytes[file.uri] = file.unlinked2.informativeBytes;
-          file.takeParsedUnitForLinking();
-        }
-      }
       eventsController?.add(ReuseLinkedBundle(cycle: cycle));
-      var bundleReader = performance.run('bundleReader', (performance) {
-        return BundleReader(
-          elementFactory: elementFactory,
-          unitsInformativeBytes: unitsInformativeBytes,
-          resolutionBytes: linkedBytes,
-          libraryManifests: probe.libraryManifests,
-        );
-      });
-      elementFactory.addBundle(bundleReader);
-      elementFactory.libraryManifests.addAll(probe.libraryManifests);
+      _attachBundle(
+        cycle: cycle,
+        resolutionBytes: linkedBytes,
+        manifests: probe.libraryManifests,
+        performance: performance,
+      );
       addToLogRing('[load][addedBundle][cycle: $cycle]');
     }
+
     loadedBundles.add(cycle);
+    onCycle?.call(cycle);
 
     return .loaded;
+  }
+
+  /// Loads [cycle] and any dependencies still missing from this context.
+  LibraryLoadResult _loadCycleWithDependencies({
+    required LibraryCycle cycle,
+    required bool allowLink,
+    required void Function(LibraryCycle)? onCycle,
+    required OperationPerformanceImpl performance,
+  }) {
+    if (loadedBundles.contains(cycle)) {
+      return .loaded;
+    }
+
+    return performance.run('loadBundle', (performance) {
+      LibraryLoadResult loadCycle(LibraryCycle cycle) => _loadBundle(
+        cycle: cycle,
+        performance: performance,
+        allowLink: allowLink,
+        onCycle: onCycle,
+      );
+
+      // During discovery the walker has already visited every dependency.
+      // A previously computed graph can still contain unloaded cycles.
+      if (cycle.directDependencies.every(loadedBundles.contains)) {
+        return loadCycle(cycle);
+      }
+
+      for (var pendingCycle in _collectCyclesToLoad(cycle)) {
+        var result = loadCycle(pendingCycle);
+
+        if (result == .cacheMiss) {
+          return result;
+        }
+      }
+
+      return .loaded;
+    });
   }
 
   /// Returns a previously linked bundle entry for [cycle] if present and

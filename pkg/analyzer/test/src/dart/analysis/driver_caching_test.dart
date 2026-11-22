@@ -79,6 +79,35 @@ int b = a;
     );
   }
 
+  test_cachedSummary_superParameter_defaultWithImportPrefix() async {
+    withFineDependencies = true;
+    useEmptyByteStore();
+    newFile('$testPackageLibPath/values.dart', 'const defaultValue = 7;');
+    newFile('$testPackageLibPath/base.dart', r'''
+import 'values.dart' as values;
+
+class Base {
+  Base({int value = values.defaultValue});
+}
+''');
+    addTestFile(r'''
+import 'base.dart';
+
+class Derived extends Base {
+  Derived({super.value});
+}
+''');
+
+    driverFor(testFile).produceSummary(testFile.path, (_) {});
+
+    // A fresh driver must resolve the inherited default from the stored bundles.
+    await disposeAnalysisContextCollection();
+    var result = await resolveTestFile();
+
+    expect(result.diagnostics, isEmpty);
+    _assertNoLinkedCycles();
+  }
+
   test_change_factoryConstructor_addEqNothing() async {
     await resolveTestCodeWithDiagnostics(r'''
 class A {
@@ -434,6 +463,35 @@ library;
       LibraryLoadResult.loaded,
     );
     _assertNoLinkedCycles();
+  }
+
+  test_produceSummary_part_publishesDependenciesBeforeLibrary() async {
+    withFineDependencies = false;
+    useEmptyByteStore();
+    var dependency = newFile(
+      '$testPackageLibPath/dependency.dart',
+      'class A {}',
+    );
+    var part = newFile('$testPackageLibPath/part.dart', "part of 'test.dart';");
+    addTestFile(r'''
+import 'dependency.dart';
+part 'part.dart';
+
+class B extends A {}
+''');
+
+    var publishedPaths = <String>[];
+    driverFor(testFile).produceSummary(part.path, (cycle) {
+      publishedPaths.addAll(
+        cycle.libraries.map((library) => library.file.path),
+      );
+    });
+
+    var packagePaths = {dependency.path, testFile.path, part.path};
+    expect(publishedPaths.where(packagePaths.contains), [
+      dependency.path,
+      testFile.path,
+    ]);
   }
 
   /// The latest language version for `// @dart` comments is the language
