@@ -1371,9 +1371,7 @@ class AnalysisDriver {
 
     var file = _fsState.getFileForPath(path);
 
-    // Prepare the library - the file itself, or the known library.
-    var kind = file.kind;
-    var library = kind.library ?? kind.asLibrary;
+    var library = file.kind.libraryForAnalysis;
 
     // We need the fully resolved unit, or the result is not cached.
     return _logger.run('Compute analysis result for $path', () {
@@ -1809,9 +1807,7 @@ class AnalysisDriver {
     scheduler.accumulatedPerformance.run('getErrors', (performance) {
       var file = _fsState.getFileForPath(path);
 
-      // Prepare the library - the file itself, or the known library.
-      var kind = file.kind;
-      var library = kind.library ?? kind.asLibrary;
+      var library = file.kind.libraryForAnalysis;
 
       if (_completeRequestsIfMissingSdkLibrary(library)) {
         return;
@@ -1884,9 +1880,7 @@ class AnalysisDriver {
     scheduler.accumulatedPerformance.run('getIndex', (performance) {
       var file = _fsState.getFileForPath(path);
 
-      // Prepare the library - the file itself, or the known library.
-      var kind = file.kind;
-      var library = kind.library ?? kind.asLibrary;
+      var library = file.kind.libraryForAnalysis;
 
       if (_completeRequestsIfMissingSdkLibrary(library)) {
         return;
@@ -2092,9 +2086,7 @@ class AnalysisDriver {
     scheduler.accumulatedPerformance.run('getUnitElement', (performance) {
       var file = _fsState.getFileForPath(path);
 
-      // Prepare the library - the file itself, or the known library.
-      var kind = file.kind;
-      var library = kind.library ?? kind.asLibrary;
+      var library = file.kind.libraryForAnalysis;
 
       if (_completeRequestsIfMissingSdkLibrary(library)) {
         return;
@@ -2157,9 +2149,7 @@ class AnalysisDriver {
       scheduler.accumulatedPerformance.run('produceErrors', (performance) {
         var file = _fsState.getFileForPath(path);
 
-        // Prepare the library - the file itself, or the known library.
-        var kind = file.kind;
-        var library = kind.library ?? kind.asLibrary;
+        var library = file.kind.libraryForAnalysis;
 
         if (workingStatistics case var workingStatistics?) {
           for (var file in library.files) {
@@ -2388,9 +2378,7 @@ class AnalysisDriver {
       int? offset = request.offset ?? getOffsetFromLineColumn();
       if (offset == null) return null;
 
-      // Prepare the library - the file itself, or the known library.
-      var kind = file.kind;
-      var library = kind.library ?? kind.asLibrary;
+      var library = file.kind.libraryForAnalysis;
 
       performance.run('libraryContext', (performance) {
         libraryContext.load(targetLibrary: library, performance: performance);
