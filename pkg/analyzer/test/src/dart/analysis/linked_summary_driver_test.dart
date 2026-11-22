@@ -2,8 +2,10 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/src/dart/analysis/analysis_context_collection.dart';
@@ -54,6 +56,181 @@ void main() {
           inbox.close();
           await dir.delete(recursive: true);
         }
+      });
+    }
+  });
+
+  test('background batches request only uncached summaries', () async {
+    var dir = await Directory.systemTemp.createTemp('summary-background-');
+    addTearDown(() => dir.delete(recursive: true));
+    File write(String name) =>
+        File.fromUri(dir.uri.resolve(name))
+          ..writeAsStringSync('int value = "wrong";');
+    var first = write('first.dart');
+    var second = write('second.dart');
+    var store = MemoryByteStore();
+
+    Future<List<List<String>>> analyze(List<File> files) async {
+      var requests = <List<String>>[];
+      var inbox = ReceivePort();
+      inbox.listen((message) {
+        if (message is List<Object?>) {
+          if (SummaryRequest.tryDecode(message) case var request?) {
+            requests.add(request.paths);
+            request.reply.send('declined');
+          }
+        }
+      });
+      var client = LinkedSummaryCoordinator(inbox.sendPort);
+      var collection = AnalysisContextCollectionImpl(
+        includedPaths: [dir.path],
+        sdkPath: File(Platform.resolvedExecutable).parent.parent.path,
+        byteStore: store,
+        withFineDependencies: true,
+        linkedSummaryCoordinator: client,
+        drainStreams: false,
+      );
+      try {
+        var driver = collection.contextFor(first.path).driver;
+        var diagnostics = collection.scheduler.events
+            .where((event) => event is AnalysisResultWithDiagnostics)
+            .cast<AnalysisResultWithDiagnostics>()
+            .take(files.length)
+            .toList();
+        for (var file in files) {
+          driver.addFile(file.path);
+        }
+        var results = await diagnostics;
+        expect(
+          results.map((r) => r.path),
+          unorderedEquals(files.map((f) => f.path)),
+        );
+        for (var result in results) {
+          expect(
+            result.diagnostics.map((d) => d.diagnosticCode.lowerCaseName),
+            ['invalid_assignment'],
+          );
+        }
+        return requests;
+      } finally {
+        await collection.dispose();
+        client.close();
+        inbox.close();
+      }
+    }
+
+    expect(await analyze([first]), [
+      [first.path],
+    ]);
+    expect(await analyze([second, first]), [
+      [second.path],
+    ]);
+    expect(await analyze([first, second]), isEmpty);
+  });
+
+  group('interactive summary requests', () {
+    late Directory directory;
+    late File first;
+    late File second;
+    late ReceivePort inbox;
+    late LinkedSummaryCoordinator client;
+    late AnalysisContextCollectionImpl collection;
+    late List<String> requestedPaths;
+    late void Function(SummaryRequest) reply;
+
+    setUp(() {
+      directory = Directory.systemTemp.createTempSync('summary-requests-');
+      File write(String name) =>
+          File.fromUri(directory.uri.resolve(name))
+            ..writeAsStringSync('class Entry { void member() {} }');
+      first = write('first.dart');
+      second = write('second.dart');
+      requestedPaths = [];
+      inbox = ReceivePort();
+      client = LinkedSummaryCoordinator(inbox.sendPort);
+      inbox.listen((message) {
+        if (message is List<Object?>) {
+          var request = SummaryRequest.tryDecode(message);
+          if (request != null) {
+            requestedPaths.addAll(request.paths);
+            reply(request);
+          }
+        }
+      });
+    });
+
+    void start(ByteStore store) {
+      collection = AnalysisContextCollectionImpl(
+        includedPaths: [directory.path],
+        sdkPath: File(Platform.resolvedExecutable).parent.parent.path,
+        byteStore: store,
+        withFineDependencies: true,
+        linkedSummaryCoordinator: client,
+      );
+    }
+
+    tearDown(() async {
+      client.close();
+      await collection.dispose();
+      inbox.close();
+      directory.deleteSync(recursive: true);
+    });
+
+    test('a corrupt bundle fails only the request that reads it', () async {
+      start(_TruncatedBundleStore());
+      reply = (request) => request.reply.send(null);
+      var context = collection.contextFor(first.path);
+      await expectLater(
+        context.currentSession.getResolvedUnit(first.path),
+        throwsRangeError,
+      );
+      expect(
+        await context.currentSession.getResolvedUnit(second.path),
+        isA<ResolvedUnitResult>(),
+      );
+    });
+
+    test('a waiting file lets unrelated editor work finish', () async {
+      start(MemoryByteStore());
+      var firstRequest = Completer<SummaryRequest>();
+      reply = (request) {
+        if (request.paths.contains(first.path)) {
+          firstRequest.complete(request);
+        } else {
+          request.reply.send('declined');
+        }
+      };
+      var driver = collection.contextFor(first.path).driver;
+      var resolving = driver.getResolvedUnit(first.path);
+      var pending = await firstRequest.future;
+      try {
+        await driver.getFilesDefiningClassMemberName('member');
+        expect(
+          await driver.getResolvedUnit(second.path),
+          isA<ResolvedUnitResult>(),
+        );
+        expect(requestedPaths, [first.path, second.path]);
+      } finally {
+        pending.reply.send('declined');
+        await resolving;
+      }
+    });
+
+    for (var (reason, response, retry) in [
+      ('a declined file', 'declined', true),
+      ('producer failure', null, false),
+    ]) {
+      test('resolves another cold file after $reason', () async {
+        start(MemoryByteStore());
+        reply = (request) => request.reply.send(response);
+        var driver = collection.contextFor(first.path).driver;
+        for (var file in [first, second]) {
+          expect(
+            await driver.getResolvedUnit(file.path),
+            isA<ResolvedUnitResult>(),
+          );
+        }
+        expect(requestedPaths, [first.path, if (retry) second.path]);
       });
     }
   });
@@ -185,4 +362,18 @@ void main() {
       },
     );
   });
+}
+
+/// Supplies a single truncated linked bundle; subsequent reads use normal data.
+final class _TruncatedBundleStore extends MemoryByteStore {
+  bool _sentTruncatedBundle = false;
+
+  @override
+  Uint8List? get(String key) {
+    if (!_sentTruncatedBundle && key.endsWith('.linked')) {
+      _sentTruncatedBundle = true;
+      return Uint8List(1);
+    }
+    return super.get(key);
+  }
 }
