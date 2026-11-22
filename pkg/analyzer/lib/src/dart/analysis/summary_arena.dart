@@ -18,14 +18,18 @@ final class SummaryArenaWriter {
     }
 
     var file = File(path)..createSync(exclusive: true);
-    var handle = file.openSync(mode: FileMode.writeOnly);
-
+    RandomAccessFile? handle;
     try {
+      handle = file.openSync(mode: FileMode.writeOnly);
       handle.truncateSync(capacity);
 
       return SummaryArenaWriter._(handle, capacity);
     } catch (_) {
-      handle.closeSync();
+      try {
+        handle?.closeSync();
+      } finally {
+        file.deleteSync();
+      }
       rethrow;
     }
   }

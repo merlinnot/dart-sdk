@@ -67,6 +67,22 @@ void main() {
       );
     });
 
+    for (var failure in _SetupFailure.values) {
+      test('can retry after failing to ${failure.name} the arena', () {
+        IOOverrides.runZoned(
+          () => expect(
+            () => SummaryArenaWriter(file.path, 3),
+            throwsA(isA<FileSystemException>()),
+          ),
+          createFile: (_) => _FailingFile(file, failure),
+        );
+
+        var writer = SummaryArenaWriter(file.path, 3);
+        addTearDown(writer.close);
+        expect(writer.append(Uint8List.fromList([7])), 0);
+      });
+    }
+
     test('append returns the offset of each write visible to readers', () {
       var writer = SummaryArenaWriter(file.path, 3);
       try {
@@ -83,3 +99,29 @@ void main() {
     });
   });
 }
+
+final class _FailingFile(final File file, final _SetupFailure failure)
+    implements File {
+  @override
+  void createSync({bool recursive = false, bool exclusive = false}) =>
+      file.createSync(recursive: recursive, exclusive: exclusive);
+
+  @override
+  void deleteSync({bool recursive = false}) =>
+      file.deleteSync(recursive: recursive);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+
+  @override
+  RandomAccessFile openSync({FileMode mode = FileMode.read}) {
+    if (failure == _SetupFailure.open) {
+      throw FileSystemException('Failed to open', file.path);
+    }
+
+    // A read-only handle makes truncateSync fail on the real file.
+    return file.openSync();
+  }
+}
+
+enum _SetupFailure { open, truncate }
