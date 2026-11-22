@@ -41,6 +41,8 @@ class ContextBuilderImpl {
   /// The resource provider used to access the file system.
   final ResourceProvider resourceProvider;
 
+  final void Function(String path)? _onConfigurationDependency;
+
   /// Analysis options mappings shared by all contexts built by this builder.
   final AnalysisOptionsMap _optionsMap = AnalysisOptionsMap();
 
@@ -50,7 +52,7 @@ class ContextBuilderImpl {
   /// Initialize a newly created context builder. If a [resourceProvider] is
   /// given, then it will be used to access the file system, otherwise the
   /// default resource provider will be used.
-  new({ResourceProvider? resourceProvider})
+  new({ResourceProvider? resourceProvider, this._onConfigurationDependency})
     : resourceProvider = resourceProvider ?? PhysicalResourceProvider.INSTANCE;
 
   /// Return an analysis context corresponding to the given [contextRoot].
@@ -289,6 +291,7 @@ class ContextBuilderImpl {
       );
       if (embedderYamlSource != null) {
         var embedderYamlPath = embedderYamlSource.fullName;
+        _onConfigurationDependency?.call(embedderYamlPath);
         var libFolder = resourceProvider.getFile(embedderYamlPath).parent;
         var embedderYaml = locateEmbedderYamlFor(libFolder);
         if (embedderYaml != null) {

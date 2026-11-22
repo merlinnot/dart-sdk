@@ -460,6 +460,7 @@ class BlazeWorkspace extends Workspace
     String filePath, {
     bool lookForBuildFileSubstitutes = true,
     bool provideLanguageVersion = true,
+    void Function(String path)? onConfigurationDependency,
   }) {
     var context = provider.pathContext;
     var startFolder = provider.getFolder(filePath);
@@ -467,6 +468,7 @@ class BlazeWorkspace extends Workspace
       var parent = folder.parent;
 
       var blazeOutFolder = parent.getFolder('blaze-out');
+      onConfigurationDependency?.call(blazeOutFolder.path);
       if (blazeOutFolder.exists) {
         // Found the "out" folder; must be a Blaze workspace.
         String root = parent.path;
@@ -483,7 +485,10 @@ class BlazeWorkspace extends Workspace
       }
 
       // Found the WORKSPACE file, must be a non-git workspace.
-      if (folder.getFile(file_paths.blazeWorkspaceMarker).exists) {
+      var marker = folder.getFile(file_paths.blazeWorkspaceMarker);
+      onConfigurationDependency?.call(marker.path);
+
+      if (marker.exists) {
         String root = folder.path;
         var binPaths = _findBinFolderPaths(folder);
         binPaths = binPaths..add(context.join(root, 'blaze-bin'));
