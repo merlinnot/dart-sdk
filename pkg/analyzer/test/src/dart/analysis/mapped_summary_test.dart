@@ -6,6 +6,10 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:analyzer/dart/analysis/results.dart';
+import 'package:analyzer/src/dart/analysis/analysis_context_collection.dart';
+import 'package:analyzer/src/dart/analysis/byte_store.dart';
+import 'package:analyzer/src/dart/analysis/linked_summary_coordinator.dart';
 import 'package:analyzer/src/dart/analysis/mapped_summary.dart';
 import 'package:analyzer/src/dart/analysis/summary_arena.dart';
 import 'package:test/test.dart';
@@ -50,6 +54,48 @@ void main() {
       expect(view, [11, 13]);
       expect(() => view[0] = 0, throwsUnsupportedError);
     });
+
+    for (var (name, store, expectedRequests) in [
+      ('rejected producer request', MemoryByteStore(), 1),
+      ('reference-counted store', CiderByteStore(), 0),
+    ]) {
+      test('resolves locally with a $name', () async {
+        var dir = await Directory.systemTemp.createTemp('analyzer-fallback-');
+        var file = File('${dir.path}/client.dart')
+          ..writeAsStringSync('int value = "wrong";');
+        var inbox = ReceivePort();
+        var requests = 0;
+        inbox.listen((dynamic message) {
+          if (message case [..., SendPort reply] when message.length > 1) {
+            requests++;
+            reply.send(null);
+          }
+        });
+        var client = LinkedSummaryCoordinator(inbox.sendPort);
+        var collection = AnalysisContextCollectionImpl(
+          includedPaths: [dir.path],
+          sdkPath: File(Platform.resolvedExecutable).parent.parent.path,
+          byteStore: store,
+          withFineDependencies: true,
+          linkedSummaryCoordinator: client,
+        );
+        try {
+          var session = collection.contextFor(file.path).currentSession;
+          var result =
+              await session.getResolvedUnit(file.path) as ResolvedUnitResult;
+          expect(
+            result.diagnostics.map((d) => d.diagnosticCode.lowerCaseName),
+            ['invalid_assignment'],
+          );
+          expect(requests, expectedRequests);
+        } finally {
+          await collection.dispose();
+          client.close();
+          inbox.close();
+          await dir.delete(recursive: true);
+        }
+      });
+    }
 
     test('rejects a file with a different length', () async {
       await file.writeAsBytes([7, 11, 13]);
