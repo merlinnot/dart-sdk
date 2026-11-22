@@ -5,34 +5,50 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-/// One writer appends to the arena. Only readers need a resident mapping.
+/// Appends summary bytes to a fixed-size file shared with mapped readers.
 final class SummaryArenaWriter {
   final RandomAccessFile _file;
   final int _capacity;
   int _length = 0;
 
+  /// Creates a new file at [path] with room for [capacity] bytes.
   factory(String path, int capacity) {
-    if (capacity <= 0) throw ArgumentError.value(capacity);
+    if (capacity <= 0) {
+      throw ArgumentError.value(capacity, 'capacity');
+    }
+
     var file = File(path)..createSync(exclusive: true);
-    var sink = file.openSync(mode: FileMode.writeOnly);
+    var handle = file.openSync(mode: FileMode.writeOnly);
+
     try {
-      sink.truncateSync(capacity);
-      return SummaryArenaWriter._(sink, capacity);
+      handle.truncateSync(capacity);
+
+      return SummaryArenaWriter._(handle, capacity);
     } catch (_) {
-      sink.closeSync();
+      handle.closeSync();
       rethrow;
     }
   }
 
   new _(this._file, this._capacity);
+
+  /// The number of bytes appended so far.
   int get length => _length;
 
+  /// Appends [bytes] and returns their starting offset in the arena.
+  ///
+  /// Throws a [StateError] if the bytes would exceed the arena's capacity.
   int append(Uint8List bytes) {
     var start = _length;
     var end = start + bytes.length;
-    if (end > _capacity) throw StateError('Summary budget exhausted');
+
+    if (end > _capacity) {
+      throw StateError('Summary budget exhausted');
+    }
+
     _file.writeFromSync(bytes);
     _length = end;
+
     return start;
   }
 
