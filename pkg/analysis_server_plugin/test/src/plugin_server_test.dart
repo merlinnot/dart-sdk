@@ -3,13 +3,17 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'dart:async';
+import 'dart:isolate';
 
 import 'package:analysis_server_plugin/edit/dart/correction_producer.dart';
 import 'package:analysis_server_plugin/plugin.dart';
 import 'package:analysis_server_plugin/registry.dart';
 import 'package:analysis_server_plugin/src/correction/ignore_diagnostic.dart';
 import 'package:analysis_server_plugin/src/plugin_server.dart';
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/ast/ast.dart';
+import 'package:analyzer/src/dart/analysis/driver.dart';
+import 'package:analyzer/src/dart/analysis/linked_summary_coordinator.dart';
 import 'package:analyzer/src/test_utilities/platform.dart';
 import 'package:analyzer/src/test_utilities/test_code_format.dart';
 import 'package:analyzer_plugin/protocol/protocol.dart' as protocol;
@@ -17,6 +21,7 @@ import 'package:analyzer_plugin/protocol/protocol_common.dart' as protocol;
 import 'package:analyzer_plugin/protocol/protocol_constants.dart' as protocol;
 import 'package:analyzer_plugin/protocol/protocol_generated.dart' as protocol;
 import 'package:analyzer_plugin/protocol/protocol_generated.dart';
+import 'package:analyzer_plugin/src/channel/isolate_channel.dart';
 import 'package:analyzer_plugin/utilities/assist/assist.dart';
 import 'package:analyzer_plugin/utilities/change_builder/change_builder_core.dart';
 import 'package:analyzer_plugin/utilities/fixes/fixes.dart';
@@ -29,6 +34,90 @@ import 'lint_rules.dart';
 import 'plugin_server_test_base.dart';
 
 void main() {
+  group('summary capability negotiation', () {
+    for (var (name, versions) in [
+      ('absent offer', null),
+      (
+        'incompatible protocol',
+        [
+          LinkedSummaryCoordinator.protocolVersion + 1,
+          AnalysisDriver.DATA_VERSION,
+        ],
+      ),
+      (
+        'incompatible data format',
+        [
+          LinkedSummaryCoordinator.protocolVersion,
+          AnalysisDriver.DATA_VERSION + 1,
+        ],
+      ),
+    ]) {
+      test('analyzes locally with an $name', () async {
+        var fixture = PluginServerTestBase();
+        await fixture.setUp();
+        addTearDown(fixture.tearDown);
+        var root = fixture.getFolder('/project')..create();
+        var entry = root.getFile('entry.dart')
+          ..writeAsStringSync('class Entry {}');
+        var server = PluginServer.new2(
+          resourceProvider: fixture.resourceProvider,
+          plugins: {},
+        );
+        var host = ReceivePort();
+        var broker = ReceivePort();
+        var messages = StreamQueue(host);
+        var channel = PluginIsolateChannel(host.sendPort);
+        addTearDown(() async {
+          channel.close();
+          host.close();
+          broker.close();
+          await messages.cancel();
+          await server.contextCollection?.dispose();
+        });
+        await server.initialize();
+        server.start(channel);
+        var plugin = await messages.next as SendPort;
+        var version = PluginVersionCheckParams(
+          fixture.byteStoreRoot.path,
+          fixture.sdkRoot.path,
+          '1.0.0',
+        ).toRequest('version');
+        plugin.send({
+          ...version.toJson(),
+          if (versions != null)
+            LinkedSummaryCoordinator.capability: [...versions, broker.sendPort],
+        });
+        Future<protocol.Response> response(String id) async {
+          while (await messages.hasNext) {
+            if (await messages.next case Map<String, Object?> message
+                when message['id'] == id) {
+              return protocol.Response.fromJson(message);
+            }
+          }
+          throw StateError('Plugin channel closed before $id');
+        }
+
+        expect(
+          PluginVersionCheckResult.fromResponse(await response('version'))
+              .isCompatible,
+          isTrue,
+        );
+        plugin.send(
+          AnalysisSetAnalysisRootsParams([
+            root.path,
+          ], []).toRequest('roots').toJson(),
+        );
+        expect((await response('roots')).error, isNull);
+        var driver = server.contextCollection!.contextFor(entry.path).driver;
+        expect(driver.scheduler.linkedSummaryCoordinator, isNull);
+        expect(
+          await driver.getResolvedUnit(entry.path),
+          isA<ResolvedUnitResult>(),
+        );
+      });
+    }
+  });
+
   defineReflectiveTests(PluginServerTest);
   defineReflectiveTests(PluginServerMapTest);
 }

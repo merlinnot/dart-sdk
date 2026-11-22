@@ -2,14 +2,20 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'dart:async';
 import 'dart:io' as io;
+import 'dart:isolate';
 
 import 'package:analysis_server/src/plugin/plugin_isolate.dart';
+import 'package:analysis_server/src/plugin/server_isolate_channel.dart';
+import 'package:analysis_server/src/plugin2/generator.dart';
 import 'package:analysis_server/src/session_logger/session_logger.dart';
 import 'package:analyzer/file_system/file_system.dart';
+import 'package:analyzer/instrumentation/instrumentation.dart';
 import 'package:analyzer/src/context/packages.dart';
 import 'package:analyzer/src/dart/analysis/context_root.dart';
 import 'package:analyzer/src/dart/analysis/linked_summary_coordinator.dart';
+import 'package:analyzer/src/dart/analysis/linked_summary_protocol.dart';
 import 'package:analyzer/src/workspace/basic.dart';
 import 'package:analyzer_plugin/channel/channel.dart';
 import 'package:analyzer_plugin/protocol/protocol.dart';
@@ -23,6 +29,7 @@ import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
 import '../../mocks.dart';
+import '../../support/sdk_paths.dart';
 import 'plugin_test_support.dart';
 
 void main() {
@@ -276,6 +283,78 @@ class PluginSessionFromDiskTest extends PluginTestSupport {
         pluginIsolate.currentSession = session;
         expect(await session.start(byteStorePath, ''), isTrue);
         await session.stop();
+      },
+    );
+  }
+
+  Future<void> test_summaryOfferReachesThePluginDriver() async {
+    await withPlugin(
+      content: PluginPackageGenerator(configurations: []).generateEntrypoint(),
+      test: (pluginPath) async {
+        var root = io.Directory(path.join(pluginPath, 'project'))..createSync();
+        var entry = io.File(path.join(root.path, 'entry.dart'))
+          ..writeAsStringSync('class Entry {}');
+        var requested = <String>[];
+        var broker = ReceivePort();
+        broker.listen((message) {
+          if (message is List<Object?>) {
+            var request = SummaryRequest.tryDecode(message);
+            if (request != null) {
+              requested.addAll(request.paths);
+              request.reply.send(null);
+            }
+          }
+        });
+
+        var channel = ServerIsolateChannel(
+          Uri.file(path.join(pluginPath, 'bin', 'plugin.dart')),
+          Uri.file(sdkPackageConfigPath),
+          InstrumentationService.NULL_SERVICE,
+          SessionLogger(),
+          connectSummaryReader: () => broker.sendPort,
+        );
+        var diagnostics = Completer<AnalysisErrorsParams>();
+        var responses = StreamController<Response>.broadcast();
+        Future<Response> send(Request request) {
+          var response = responses.stream.firstWhere((r) => r.id == request.id);
+          channel.sendRequest(request);
+          return response;
+        }
+
+        try {
+          await channel.listen(responses.add, (notification) {
+            if (notification.event == 'analysis.errors') {
+              var errors = AnalysisErrorsParams.fromNotification(notification);
+              if (errors.file == entry.path && !diagnostics.isCompleted) {
+                diagnostics.complete(errors);
+              }
+            }
+          });
+          var sdk = io.File(io.Platform.resolvedExecutable).parent.parent.path;
+          var version = await send(
+            PluginVersionCheckParams(
+              pluginPath,
+              sdk,
+              '1.0.0',
+            ).toRequest('version'),
+          );
+          expect(
+            PluginVersionCheckResult.fromResponse(version).isCompatible,
+            isTrue,
+          );
+          var roots = await send(
+            AnalysisSetAnalysisRootsParams([root.path], []).toRequest('roots'),
+          );
+          expect(roots.error, isNull);
+          expect((await diagnostics.future).errors, isEmpty);
+          expect(requested, contains(entry.path));
+          await send(PluginShutdownParams().toRequest('shutdown'));
+        } finally {
+          channel.kill();
+          channel.close();
+          broker.close();
+          await responses.close();
+        }
       },
     );
   }
