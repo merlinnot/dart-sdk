@@ -106,6 +106,9 @@ final class LinkedSummaryBroker extends LinkedSummaryCoordinator {
 
   void _onProducerEvent(Object? event) {
     switch (event) {
+      case _ProducerEvent.failed:
+        // Wake readers while the producer drains its pending disk writes.
+        _disconnectReaders();
       case SendPort producer:
         _producerPort.complete(producer);
       case _ArenaDescriptor descriptor:
