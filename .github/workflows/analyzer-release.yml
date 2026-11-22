@@ -1,0 +1,108 @@
+name: Publish analyzer toolchain
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: analyzer-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  source:
+    if: github.repository == 'merlinnot/dart-sdk'
+    runs-on: ubuntu-24.04
+    outputs:
+      coordinator: ${{ steps.feature.outputs.present }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: pkg/analyzer/lib/src/dart/analysis
+      - id: feature
+        run: |
+          if [[ -f pkg/analyzer/lib/src/dart/analysis/linked_summary_coordinator.dart ]]; then
+            echo present=true >> "$GITHUB_OUTPUT"
+          else
+            echo present=false >> "$GITHUB_OUTPUT"
+            echo "Waiting for the coordinator to land on this branch." >> "$GITHUB_STEP_SUMMARY"
+          fi
+  build:
+    needs: source
+    if: needs.source.outputs.coordinator == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: macos-arm64
+            checksum: 7319f3d4292124cc2341a004559a8e762c87ea196d2ff6fc93e95c3db996ed68
+          - runner: ubuntu-24.04
+            platform: linux-x64
+            checksum: d699e9f52b04e36e1d39759d3c9d3569c681ae0664401c0f8e4602827cf98303
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    env:
+      PLATFORM: ${{ matrix.platform }}
+      SDK_SHA256: ${{ matrix.checksum }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build the server and bundle its plugin dependencies
+        shell: bash
+        run: |
+          python -m pip install PyYAML==6.0.3
+          cd "$RUNNER_TEMP"
+          curl -fLSs --retry 3 -o runtime.zip \
+            "https://storage.googleapis.com/dart-archive/channels/dev/release/3.15.0-157.0.dev/sdk/dartsdk-$PLATFORM-release.zip"
+          echo "$SDK_SHA256  runtime.zip" | shasum -a 256 -c -
+          unzip -q runtime.zip
+          python "$GITHUB_WORKSPACE/tools/analyzer_release/build.py" dart-sdk
+          python "$GITHUB_WORKSPACE/tools/analyzer_release/smoke.py" dart-sdk/bin/dart --shared
+          tar -czf "analyzer-$PLATFORM.tar.gz" dart-sdk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: analyzer-${{ matrix.platform }}
+          path: ${{ runner.temp }}/analyzer-*.tar.gz
+          compression-level: 0
+          retention-days: 2
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Publish the verified pair
+        working-directory: assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="analyzer-$GITHUB_SHA"
+          sha256sum analyzer-{linux-x64,macos-arm64}.tar.gz > SHA256SUMS
+          jq -n --arg revision "$GITHUB_SHA" '{revision: $revision}' > analyzer.json
+          if [[ "$(gh api "repos/$GH_REPO/branches/main" --jq .commit.sha)" != "$GITHUB_SHA" ]]; then
+            echo "A newer commit is on main. Leaving latest at the last verified release."
+            exit 0
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" == false ]]; then
+              exit 0
+            fi
+            gh release upload "$tag" ./* --clobber
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --draft --title "Analyzer ${GITHUB_SHA:0:12}" --notes "Verified macOS arm64 and Linux x64 analyzer toolchains." ./*
+          fi
+          gh release edit "$tag" --draft=false --latest

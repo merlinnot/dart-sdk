@@ -4,6 +4,7 @@
 
 import 'package:analyzer/src/analysis_options/analysis_options.dart';
 import 'package:analyzer/src/util/platform_info.dart';
+import 'package:path/path.dart' as path;
 
 /// This class can generate various files to make up the shared plugin package.
 class PluginPackageGenerator {
@@ -80,9 +81,25 @@ dependencies:
       buffer.write(configuration.sourceYaml());
     }
 
-    if (_dependencyOverrides != null) {
+    // Release bundles carry the exact packages used to build this server.
+    // Including their absolute paths in the generated pubspec also keys the
+    // plugin snapshot cache by the installed release.
+    const bundled = String.fromEnvironment('analyzer.release.packages');
+    var overrides = {
+      if (bundled.isNotEmpty)
+        for (var name in bundled.split(','))
+          name: PathPluginSource(
+            path: path.join(
+              path.dirname(path.dirname(platform.resolvedExecutable)),
+              'analyzer-packages',
+              name,
+            ),
+          ),
+      ...?_dependencyOverrides,
+    };
+    if (overrides.isNotEmpty) {
       buffer.write('dependency_overrides:\n');
-      for (var configuration in _dependencyOverrides.entries) {
+      for (var configuration in overrides.entries) {
         buffer.write(configuration.value.toYaml(name: configuration.key));
       }
     }
