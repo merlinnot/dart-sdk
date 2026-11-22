@@ -10,8 +10,10 @@ part of 'linked_summary_coordinator.dart';
 /// broker and its producer share an isolate group and exchange typed messages.
 final class LinkedSummaryBroker extends LinkedSummaryCoordinator {
   final RawReceivePort _readers;
-  final _ready = Completer<SendPort?>();
+  final _producerPort = Completer<SendPort?>();
   late final Future<void> _producerLifetime;
+
+  /// Maps each pending reply port to whether its reader requested progress.
   final _pendingReaders = <SendPort, bool>{};
 
   List<Object>? _latestProgress;
@@ -39,12 +41,25 @@ final class LinkedSummaryBroker extends LinkedSummaryCoordinator {
   /// held by readers remain valid after shutdown.
   Future<void> shutdown() => _shutdown;
 
-  /// Later requests can still reach the broker and immediately fall back.
+  /// Keeps the last notification so readers joining mid-request can catch up.
+  void _broadcastProgress(_ArenaDescriptor descriptor) {
+    var progress = [_progressMessage, descriptor.toMessage()];
+    _latestProgress = progress;
+
+    for (var MapEntry(key: reader, value: wantsProgress)
+        in _pendingReaders.entries) {
+      if (wantsProgress) {
+        reader.send(progress);
+      }
+    }
+  }
+
+  /// Releases waiting readers when the producer exits or fails to start.
   void _disconnectReaders() {
     _acceptingRequests = false;
 
-    if (!_ready.isCompleted) {
-      _ready.complete();
+    if (!_producerPort.isCompleted) {
+      _producerPort.complete();
     }
 
     for (var reader in _pendingReaders.keys) {
@@ -64,7 +79,7 @@ final class LinkedSummaryBroker extends LinkedSummaryCoordinator {
     // Register before waiting for startup so an unsubscribe can cancel a
     // queued request and a failed spawn can wake all waiting readers.
     _pendingReaders[reader] = request.wantsProgress;
-    var producer = await _ready.future;
+    var producer = await _producerPort.future;
 
     if (!_acceptingRequests ||
         producer == null ||
@@ -77,11 +92,12 @@ final class LinkedSummaryBroker extends LinkedSummaryCoordinator {
     if (request.wantsProgress && progress != null) {
       reader.send(progress);
     }
+
     producer.send(request);
   }
 
   Future<void> _invalidateRoot(String root) async {
-    var producer = await _ready.future;
+    var producer = await _producerPort.future;
 
     if (_acceptingRequests) {
       producer?.send((invalidatedRoot: root));
@@ -91,26 +107,19 @@ final class LinkedSummaryBroker extends LinkedSummaryCoordinator {
   void _onProducerEvent(Object? event) {
     switch (event) {
       case SendPort producer:
-        _ready.complete(producer);
+        _producerPort.complete(producer);
       case _ArenaDescriptor descriptor:
-        var progress = ['progress', descriptor.toMessage()];
-        _latestProgress = progress;
-        for (var MapEntry(key: reader, value: wantsProgress)
-            in _pendingReaders.entries) {
-          if (wantsProgress) {
-            reader.send(progress);
-          }
-        }
-      case (SendPort reader, _ArenaDescriptor? descriptor):
+        _broadcastProgress(descriptor);
+      case (:SendPort reader, :_ArenaDescriptor? arena):
         if (_pendingReaders.remove(reader) != null) {
-          reader.send(descriptor?.toMessage());
+          reader.send(arena?.toMessage());
         }
     }
   }
 
   void _onReaderMessage(Object? message) {
     switch (message) {
-      case ['invalidateRoot', String root]:
+      case [_invalidateRootMessage, String root]:
         unawaited(_invalidateRoot(root));
       case [SendPort reader]:
         _pendingReaders.remove(reader);
@@ -121,6 +130,7 @@ final class LinkedSummaryBroker extends LinkedSummaryCoordinator {
           reader.send(null);
           return;
         }
+
         unawaited(_forward(request));
     }
   }
@@ -150,6 +160,7 @@ final class LinkedSummaryBroker extends LinkedSummaryCoordinator {
         if (event == null) {
           break;
         }
+
         _onProducerEvent(event);
       }
     } catch (error, stack) {
@@ -172,7 +183,7 @@ final class LinkedSummaryBroker extends LinkedSummaryCoordinator {
     // An awaiting CLI may have no other live ports during cleanup.
     _readers.keepIsolateAlive = true;
     try {
-      var producer = await _ready.future;
+      var producer = await _producerPort.future;
       producer?.send(null);
       await _producerLifetime;
     } finally {

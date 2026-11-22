@@ -15,11 +15,11 @@ import 'package:test/test.dart';
 
 void main() {
   group('linked summary broker', () {
+    var sdk = File(Platform.resolvedExecutable).parent.parent.path;
     late LinkedSummaryBroker broker;
     late LinkedSummaryCoordinator plugin;
 
     setUp(() {
-      var sdk = File(Platform.resolvedExecutable).parent.parent.path;
       broker = LinkedSummaryBroker(sdk);
       plugin = LinkedSummaryCoordinator(broker.sendPort);
     });
@@ -73,14 +73,16 @@ void main() {
         await directory.delete(recursive: true);
       });
 
+      File projectFile(String relativePath) =>
+          File.fromUri(directory.uri.resolve(relativePath));
+
       String writeLibrary(String name, String content) {
-        var file = File('${directory.path}/$name.dart')
-          ..writeAsStringSync(content);
+        var file = projectFile('$name.dart')..writeAsStringSync(content);
 
         return file.path;
       }
 
-      Future<List<String>> prepare(
+      Future<List<String>> publishedPaths(
         String path, {
         Map<String, String> overlays = const {},
         Map<String, String> variables = const {},
@@ -108,7 +110,7 @@ void main() {
           var a = writeLibrary('a', "import 'b.dart'; B? a;");
           var b = writeLibrary('b', "import 'c.dart'; class B { C? c; }");
           var c = writeLibrary('c', "import 'b.dart'; class C { B? b; }");
-          var published = await prepare(a);
+          var published = await publishedPaths(a);
 
           var local = published.where({a, b, c}.contains).toList();
           expect(local, hasLength(3));
@@ -119,7 +121,7 @@ void main() {
             'later',
             "import 'a.dart'; var nested = a?.c;",
           );
-          expect(await prepare(later), [later]);
+          expect(await publishedPaths(later), [later]);
         },
       );
 
@@ -127,7 +129,7 @@ void main() {
         'a replacement reader sees configuration changed during a host rebuild',
         () async {
           var entry = writeLibrary('entry', 'class Entry {}');
-          var options = File('${directory.path}/analysis_options.yaml')
+          var options = projectFile('analysis_options.yaml')
             ..writeAsStringSync('analyzer: {}');
           Future<SummaryPreparationResult> request(
             LinkedSummaryCoordinator reader,
@@ -144,62 +146,65 @@ void main() {
         },
       );
 
-      for (var source in ['discovered', 'explicit', 'included']) {
-        test('editing $source analysis options updates exclusions', () async {
-          var entry = writeLibrary('entry', 'class Entry {}');
-          var rootOptions = File('${directory.path}/analysis_options.yaml');
-          var options = source == 'discovered'
-              ? rootOptions
-              : File('${directory.path}/shared.config');
+      for (var source in _ConfigSource.values) {
+        test(
+          'editing ${source.name} analysis options updates exclusions',
+          () async {
+            var entry = writeLibrary('entry', 'class Entry {}');
+            var rootOptions = projectFile('analysis_options.yaml');
+            var options = source == .discovered
+                ? rootOptions
+                : projectFile('shared.config');
 
-          if (source == 'included') {
-            rootOptions.writeAsStringSync('include: common.yaml');
-            File('${directory.path}/common.yaml')
-                .writeAsStringSync('include: shared.config');
-          }
+            if (source == .included) {
+              rootOptions.writeAsStringSync('include: common.yaml');
+              projectFile('common.yaml')
+                  .writeAsStringSync('include: shared.config');
+            }
 
-          const excludeEntry = 'analyzer:\n  exclude: [entry.dart]';
-          options.writeAsStringSync('analyzer: {}');
+            const excludeEntry = 'analyzer:\n  exclude: [entry.dart]';
+            options.writeAsStringSync('analyzer: {}');
 
-          Future<SummaryPreparationResult> request({
-            List<String> changed = const [],
-            Map<String, String> overlays = const {},
-          }) => plugin.prepare(
-            root: directory.path,
-            paths: [entry],
-            options: source == 'explicit' ? options.path : null,
-            changedFiles: changed,
-            overlays: overlays,
-          );
+            Future<SummaryPreparationResult> request({
+              List<String> changed = const [],
+              Map<String, String> overlays = const {},
+            }) => plugin.prepare(
+              root: directory.path,
+              paths: [entry],
+              options: source == .explicit ? options.path : null,
+              changedFiles: changed,
+              overlays: overlays,
+            );
 
-          expect(await request(), SummaryPreparationResult.prepared);
-          options.writeAsStringSync(excludeEntry);
-          expect(
-            await request(changed: [options.path]),
-            SummaryPreparationResult.unavailable,
-          );
-          expect(
-            await request(overlays: {options.path: 'analyzer: {}'}),
-            SummaryPreparationResult.prepared,
-          );
-          expect(await request(), SummaryPreparationResult.unavailable);
-          options.deleteSync();
-          expect(
-            await request(changed: [options.path]),
-            SummaryPreparationResult.prepared,
-          );
-          options.writeAsStringSync(excludeEntry);
-          expect(
-            await request(changed: [options.path]),
-            SummaryPreparationResult.unavailable,
-          );
-        });
+            expect(await request(), SummaryPreparationResult.prepared);
+            options.writeAsStringSync(excludeEntry);
+            expect(
+              await request(changed: [options.path]),
+              SummaryPreparationResult.unavailable,
+            );
+            expect(
+              await request(overlays: {options.path: 'analyzer: {}'}),
+              SummaryPreparationResult.prepared,
+            );
+            expect(await request(), SummaryPreparationResult.unavailable);
+            options.deleteSync();
+            expect(
+              await request(changed: [options.path]),
+              SummaryPreparationResult.prepared,
+            );
+            options.writeAsStringSync(excludeEntry);
+            expect(
+              await request(changed: [options.path]),
+              SummaryPreparationResult.unavailable,
+            );
+          },
+        );
       }
 
       test('an excluded path declines only its own request', () async {
         var excluded = writeLibrary('excluded', 'class Excluded {}');
         var included = writeLibrary('included', 'class Included {}');
-        File('${directory.path}/analysis_options.yaml')
+        projectFile('analysis_options.yaml')
             .writeAsStringSync('analyzer:\n  exclude: [excluded.dart]');
 
         var declined = plugin.prepare(root: directory.path, paths: [excluded]);
@@ -216,21 +221,23 @@ void main() {
       test('declared variable order does not create another scope', () async {
         var entry = writeLibrary('entry', 'class Entry {}');
         expect(
-          await prepare(entry, variables: {'a': '1', 'b': '2'}),
+          await publishedPaths(entry, variables: {'a': '1', 'b': '2'}),
           contains(entry),
         );
-        expect(await prepare(entry, variables: {'b': '2', 'a': '1'}), isEmpty);
+        expect(
+          await publishedPaths(entry, variables: {'b': '2', 'a': '1'}),
+          isEmpty,
+        );
       });
 
-      for (var explicit in [false, true]) {
-        var source = explicit ? 'explicit' : 'discovered';
+      for (var source in [_ConfigSource.discovered, _ConfigSource.explicit]) {
         test(
-          'remapping the $source package config refreshes cached scopes',
+          'remapping the ${source.name} package config refreshes cached scopes',
           () async {
-            var config = File(
-              explicit
-                  ? '${directory.path}/custom.json'
-                  : '${directory.path}/.dart_tool/package_config.json',
+            var config = projectFile(
+              source == .explicit
+                  ? 'custom.json'
+                  : '.dart_tool/package_config.json',
             )..createSync(recursive: true);
 
             String configFor(String name) => jsonEncode({
@@ -246,7 +253,7 @@ void main() {
             });
 
             String dependency(String name) {
-              var file = File('${directory.path}/$name/lib/dep.dart')
+              var file = projectFile('$name/lib/dep.dart')
                 ..createSync(recursive: true)
                 ..writeAsStringSync('class Dependency {}');
 
@@ -262,9 +269,9 @@ void main() {
               List<String> changed = const [],
               Map<String, String> overlays = const {},
             }) async {
-              var published = await prepare(
+              var published = await publishedPaths(
                 entry,
-                packages: explicit ? config.path : null,
+                packages: source == .explicit ? config.path : null,
                 variables: {'mode': mode},
                 changedFiles: changed,
                 overlays: overlays,
@@ -301,52 +308,10 @@ void main() {
           }
           var temp = Directory('${directory.path}/temp')..createSync();
           var state = Directory('${directory.path}/state')..createSync();
-          var analyzerLib = (await Isolate.resolvePackageUri(
-            Uri.parse('package:analyzer/'),
-          ))!;
-          var script = analyzerLib.resolve(
-            '../test/src/dart/analysis/fixtures/linked_summary_shutdown.dart',
-          );
-          var child = await Process.run(
-            Platform.resolvedExecutable,
-            [
-              '--packages=${(await Isolate.packageConfig)!}',
-              script.toFilePath(),
-              entry,
-            ],
-            environment: {
-              'TMPDIR': temp.path,
-              'ANALYZER_STATE_LOCATION_OVERRIDE': state.path,
-            },
-          );
-
-          expect(child.exitCode, 0, reason: '${child.stderr}');
-          expect(child.stdout.toString().trim(), 'shutdown complete');
+          await _runShutdownFixture(entry, temp: temp, state: state);
           expect(temp.listSync(), isEmpty);
 
-          // A new driver must be able to resolve the whole graph from disk.
-          var cache = FileByteStore('${state.path}/.analysis-driver');
-          var collection = AnalysisContextCollectionImpl(
-            includedPaths: [directory.path],
-            byteStore: cache,
-            withFineDependencies: true,
-            sdkPath: File(Platform.resolvedExecutable).parent.parent.path,
-          );
-          try {
-            var driver = collection.contextFor(entry).driver;
-            var target = driver.fsState.getFileForPath(entry).kind.library!;
-            expect(
-              driver.libraryContext.loadForResolution(
-                targetLibrary: target,
-                performance: OperationPerformanceImpl('warm load'),
-                allowLink: false,
-              ),
-              LibraryLoadResult.loaded,
-            );
-          } finally {
-            await collection.dispose();
-            await cache.flush();
-          }
+          await _expectPersistedSummaries(entry, state: state, sdk: sdk);
         },
       );
 
@@ -355,7 +320,7 @@ void main() {
         var second = writeLibrary('second', 'class Second {}');
         var entry = writeLibrary('entry', '');
 
-        Future<List<String>> select(String name) => prepare(
+        Future<List<String>> select(String name) => publishedPaths(
           entry,
           variables: {'mode': name},
           overlays: {entry: "export '$name.dart';"},
@@ -376,7 +341,7 @@ void main() {
         Future<Iterable<String>> dependenciesFor(
           Map<String, String> overlays,
         ) async {
-          var published = await prepare(entry, overlays: overlays);
+          var published = await publishedPaths(entry, overlays: overlays);
 
           return published.where(dependencies.contains);
         }
@@ -396,23 +361,83 @@ void main() {
             "import 'b.dart'; var value = fromB;",
           );
           var dependency = writeLibrary('b', 'const fromB = 0;');
-          await prepare(importer);
+          await publishedPaths(importer);
 
-          var first = prepare(
+          var first = publishedPaths(
             importer,
             overlays: {dependency: 'const fromB = "a";'},
           );
-          var second = prepare(
+          var second = publishedPaths(
             importer,
             overlays: {dependency: 'const fromB = false;'},
           );
           expect(await first, contains(dependency));
           expect(await second, contains(dependency));
 
-          expect(await prepare(importer), contains(dependency));
+          expect(await publishedPaths(importer), contains(dependency));
           expect(File(dependency).readAsStringSync(), 'const fromB = 0;');
         },
       );
     });
   });
 }
+
+Future<void> _expectPersistedSummaries(
+  String entry, {
+  required Directory state,
+  required String sdk,
+}) async {
+  // A new driver must be able to resolve the whole graph from disk.
+  var cache = FileByteStore('${state.path}/.analysis-driver');
+  var collection = AnalysisContextCollectionImpl(
+    includedPaths: [File(entry).parent.path],
+    byteStore: cache,
+    withFineDependencies: true,
+    sdkPath: sdk,
+  );
+  try {
+    var driver = collection.contextFor(entry).driver;
+    var target = driver.fsState.getFileForPath(entry).kind.library!;
+    expect(
+      driver.libraryContext.loadForResolution(
+        targetLibrary: target,
+        performance: OperationPerformanceImpl('warm load'),
+        allowLink: false,
+      ),
+      LibraryLoadResult.loaded,
+    );
+  } finally {
+    await collection.dispose();
+    await cache.flush();
+  }
+}
+
+Future<void> _runShutdownFixture(
+  String entry, {
+  required Directory temp,
+  required Directory state,
+}) async {
+  var analyzerLib = (await Isolate.resolvePackageUri(
+    Uri.parse('package:analyzer/'),
+  ))!;
+  var script = analyzerLib.resolve(
+    '../test/src/dart/analysis/fixtures/linked_summary_shutdown.dart',
+  );
+  var child = await Process.run(
+    Platform.resolvedExecutable,
+    [
+      '--packages=${(await Isolate.packageConfig)!}',
+      script.toFilePath(),
+      entry,
+    ],
+    environment: {
+      'TMPDIR': temp.path,
+      'ANALYZER_STATE_LOCATION_OVERRIDE': state.path,
+    },
+  );
+
+  expect(child.exitCode, 0, reason: '${child.stderr}');
+  expect(child.stdout.toString().trim(), 'shutdown complete');
+}
+
+enum _ConfigSource { discovered, explicit, included }

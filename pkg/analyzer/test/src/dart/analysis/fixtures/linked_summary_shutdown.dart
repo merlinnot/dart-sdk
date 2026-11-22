@@ -10,15 +10,18 @@ Future<void> main(List<String> args) async {
   var entry = File(args.single);
   var sdk = File(Platform.resolvedExecutable).parent.parent.path;
   var broker = LinkedSummaryBroker(sdk);
-  var result = await broker.prepare(
-    root: entry.parent.path,
-    paths: [entry.path],
-  );
+  try {
+    var result = await broker.prepare(
+      root: entry.parent.path,
+      paths: [entry.path],
+    );
 
-  if (result != SummaryPreparationResult.prepared) {
-    throw StateError('Could not prepare ${entry.path}');
+    if (result != SummaryPreparationResult.prepared) {
+      throw StateError('Could not prepare ${entry.path}');
+    }
+  } finally {
+    await broker.shutdown();
   }
 
-  await broker.shutdown();
   stdout.writeln('shutdown complete');
 }
