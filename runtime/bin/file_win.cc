@@ -147,6 +147,61 @@ MappedMemory* File::Map(File::MapType type,
   return new MappedMemory(addr, length, /*should_unmap=*/start == nullptr);
 }
 
+struct SharedSection {
+  HANDLE section;
+  void* address;
+};
+
+// Readers open the section by name. The kernel removes its backing file
+// after the last view is released, even if the producer exits first.
+void* File::CreateSharedSection(const char* backing_path,
+                                const char* name,
+                                intptr_t length,
+                                void** address) {
+  if (length <= 0) return nullptr;
+  const auto path = ToWinAPIPath(backing_path);
+  if (path == nullptr) return nullptr;
+  HANDLE file = CreateFileW(
+      path.get(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+      FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return nullptr;
+  auto size = static_cast<uint64_t>(length);
+  // The caller supplies an ASCII section name with a random suffix.
+  HANDLE section = CreateFileMappingA(file, nullptr, PAGE_READWRITE,
+                                      static_cast<DWORD>(size >> 32),
+                                      static_cast<DWORD>(size), name);
+  DWORD error = GetLastError();
+  CloseHandle(file);
+  if (section == nullptr) return nullptr;
+  if (error != ERROR_ALREADY_EXISTS) {
+    *address = MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, length);
+    if (*address != nullptr) return new SharedSection{section, *address};
+  }
+  CloseHandle(section);
+  return nullptr;
+}
+
+void File::CloseSharedSection(void* owner) {
+  auto* section = static_cast<SharedSection*>(owner);
+  UnmapViewOfFile(section->address);
+  CloseHandle(section->section);
+  delete section;
+}
+
+Dart_Handle File::MapReadOnlyShared(const char* name, intptr_t length) {
+  if (length <= 0) return Dart_Null();
+  HANDLE section = OpenFileMappingA(FILE_MAP_READ, FALSE, name);
+  if (section == nullptr) return Dart_Null();
+  void* address = MapViewOfFile(section, FILE_MAP_READ, 0, 0, length);
+  CloseHandle(section);
+  if (address == nullptr) return Dart_Null();
+  auto result = Dart_NewUnmodifiableExternalTypedDataWithFinalizer(
+      Dart_TypedData_kUint8, address, length, address, 0,
+      [](void*, void* peer) { UnmapViewOfFile(peer); });
+  if (Dart_IsError(result)) UnmapViewOfFile(address);
+  return result;
+}
+
 void MappedMemory::Unmap() {
   BOOL result = VirtualFree(address_, 0, MEM_RELEASE);
   ASSERT(result);

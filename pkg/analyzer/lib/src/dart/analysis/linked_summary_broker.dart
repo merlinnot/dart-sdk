@@ -160,7 +160,21 @@ final class LinkedSummaryBroker extends LinkedSummaryCoordinator {
       events.close();
       _disconnectReaders();
       try {
-        await directory?.delete(recursive: true);
+        if (directory != null) {
+          for (var attempt = 0; ; attempt++) {
+            try {
+              await directory.delete(recursive: true);
+              break;
+            } on FileSystemException catch (error) {
+              if (!Platform.isWindows ||
+                  attempt >= 5 ||
+                  !const {5, 32}.contains(error.osError?.errorCode)) {
+                rethrow;
+              }
+              await Future<void>.delayed(Duration(milliseconds: 10 << attempt));
+            }
+          }
+        }
       } on FileSystemException {
         // The host may already have removed its temporary directory.
       }

@@ -67,7 +67,7 @@ class LinkedSummaryCoordinator {
       port.close();
     }
     _stats.flush();
-    _index?.file.closeSync();
+    _index?.close();
     _index = null;
   }
 
@@ -252,7 +252,8 @@ enum SummaryPreparationResult {
 /// as soon as they see the complete line.
 final class _CycleIndex {
   final Uint8List arena;
-  final RandomAccessFile file;
+  final File _indexFile;
+  late final RandomAccessFile? _handle;
   final entries = <String, Uint8List>{};
   final paths = <String, List<String>>{};
   int _position = 0;
@@ -260,9 +261,28 @@ final class _CycleIndex {
 
   new(_ArenaDescriptor descriptor)
     : arena = mapSummaryFile('${descriptor.directory}/data', descriptor.length),
-      file = File('${descriptor.directory}/index').openSync();
+      _indexFile = File('${descriptor.directory}/index') {
+    _handle = Platform.isWindows ? null : _indexFile.openSync();
+  }
+
+  void close() => _handle?.closeSync();
 
   void refresh() {
+    if (_handle case var handle?) {
+      _read(handle);
+      return;
+    }
+    // Windows denies deletion while a reader holds an index handle.
+    var file = _indexFile.openSync();
+    try {
+      file.setPositionSync(_position);
+      _read(file);
+    } finally {
+      file.closeSync();
+    }
+  }
+
+  void _read(RandomAccessFile file) {
     var unread = file.lengthSync() - _position;
 
     if (unread == 0) {
