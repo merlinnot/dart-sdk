@@ -17,6 +17,7 @@ import 'package:analysis_server/src/session_logger/session_listener.dart';
 import 'package:analyzer/dart/analysis/context_root.dart' as analyzer;
 import 'package:analyzer/exception/exception.dart';
 import 'package:analyzer/instrumentation/instrumentation.dart';
+import 'package:analyzer/src/dart/analysis/linked_summary_coordinator.dart';
 import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/util/platform_info.dart';
 import 'package:analyzer_plugin/channel/channel.dart';
@@ -77,7 +78,7 @@ class PluginIsolate {
 
   bool isLegacy;
 
-  final SendPort? linkedSummaryPort;
+  final PluginSummarySessions? summarySessions;
 
   /// The analysis roots which have been specified by the client. These may be
   /// subdirectories of the context roots.
@@ -90,7 +91,7 @@ class PluginIsolate {
     this._notificationManager,
     this.sessionListener, {
     required this.isLegacy,
-    this.linkedSummaryPort,
+    this.summarySessions,
   }) {
     // TODO(srawlins): Also print to stdout if this is `dart analyze` or
     // `flutter analyze`.
@@ -309,13 +310,13 @@ class PluginIsolate {
   }
 
   /// Creates and returns the channel used to communicate with the server.
-  ServerCommunicationChannel _createChannel() {
+  ServerCommunicationChannel _createChannel(PluginSession session) {
     return ServerIsolateChannel(
       Uri.file(executionPath!, windows: platform.isWindows),
       Uri.file(packageConfigPath!, windows: platform.isWindows),
       _instrumentationService,
       sessionListener,
-      linkedSummaryPort: linkedSummaryPort,
+      connectSummaryReader: () => summarySessions?.connect(session),
     );
   }
 
@@ -389,6 +390,8 @@ class PluginSession {
   /// The version number to be used when reporting problems related to the
   /// plugin.
   String? _version;
+
+  late final Future<void> _shutdown = _requestShutdown();
 
   new(this._isolate);
 
@@ -545,7 +548,7 @@ class PluginSession {
       );
       return false;
     }
-    channel = _isolate._createChannel();
+    channel = _isolate._createChannel(this);
     // TODO(brianwilkerson): Determine if await is necessary, if so, change the
     // return type of `channel.listen` to `Future<void>`.
     await (channel!.listen(
@@ -587,7 +590,9 @@ class PluginSession {
   }
 
   /// Requests that the plugin shutdown.
-  Future<void> stop() {
+  Future<void> stop() => _shutdown;
+
+  Future<void> _requestShutdown() {
     if (channel == null) {
       throw StateError('Cannot stop a plugin that is not running.');
     }
@@ -599,6 +604,46 @@ class PluginSession {
       }
     });
     return pluginStoppedCompleter.future;
+  }
+}
+
+/// Keeps the broker available to every session offered its port during startup.
+final class PluginSummarySessions(final LinkedSummaryBroker _broker) {
+  final _sessions = <PluginSession>{};
+  bool _closing = false;
+  late final _shutdown = _stop();
+
+  /// Called at version negotiation, when the plugin can first acquire a reader.
+  SendPort? connect(PluginSession session) {
+    if (_closing) {
+      return null;
+    }
+
+    if (_sessions.add(session)) {
+      unawaited(
+        session.onDone.then((_) {
+          _sessions.remove(session);
+        }),
+      );
+    }
+
+    return _broker.sendPort;
+  }
+
+  /// Stops issuing ports and waits for existing plugin isolates to exit before
+  /// releasing the broker, including sessions already stopping on root removal.
+  Future<void> shutdown() => _shutdown;
+
+  Future<void> _stop() async {
+    _closing = true;
+    try {
+      await Future.wait([
+        for (var session in _sessions)
+          if (!session.pluginStoppedCompleter.isCompleted) session.stop(),
+      ]);
+    } finally {
+      await _broker.shutdown();
+    }
   }
 }
 

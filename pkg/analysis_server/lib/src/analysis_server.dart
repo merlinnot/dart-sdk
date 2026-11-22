@@ -172,7 +172,7 @@ abstract class AnalysisServer {
   late final SearchEngine searchEngine = SearchEngineImpl(driverMap.values);
 
   late final ServerByteStore _byteStore;
-  LinkedSummaryBroker? _linkedSummaryBroker;
+  PluginSummarySessions? _summarySessions;
 
   final UnlinkedUnitStore unlinkedUnitStore = UnlinkedUnitStoreImpl();
 
@@ -370,21 +370,21 @@ abstract class AnalysisServer {
       disableFileByteStore: options.disableFileByteStore ?? false,
       useSingleFileByteStore: options.useSingleFileByteStore,
     );
+    LinkedSummaryBroker? summaryBroker;
     var serverEnvironment = environment ?? io.Platform.environment;
     if (io.Platform.isMacOS &&
         _byteStore.usesFileByteStore &&
         usePlugins != false &&
         serverEnvironment['DART_ANALYZER_LINKED_SUMMARY_COORDINATOR'] == '1') {
-      _linkedSummaryBroker = LinkedSummaryBroker(
-        sdkManager.defaultSdkDirectory,
-      );
-      pluginManager.linkedSummaryPort = _linkedSummaryBroker!.sendPort;
+      summaryBroker = LinkedSummaryBroker(sdkManager.defaultSdkDirectory);
+      _summarySessions = PluginSummarySessions(summaryBroker);
+      pluginManager.summarySessions = _summarySessions;
     }
 
     analysisDriverScheduler = analysis.AnalysisDriverScheduler(
       analysisPerformanceLogger,
       driverWatcher: pluginWatcher,
-      linkedSummaryCoordinator: _linkedSummaryBroker,
+      linkedSummaryCoordinator: summaryBroker,
     );
 
     contextManager = ContextManagerImpl(
@@ -1300,7 +1300,6 @@ abstract class AnalysisServer {
 
   @mustCallSuper
   Future<void> shutdown() async {
-    await _linkedSummaryBroker?.shutdown();
     await performanceLogger?.shutdown();
     completeLspUninitialization();
 
@@ -1318,7 +1317,11 @@ abstract class AnalysisServer {
 
     pubPackageService.shutdown();
     surveyManager?.shutdown();
-    await contextManager.dispose();
+    try {
+      await contextManager.dispose();
+    } finally {
+      await _summarySessions?.shutdown();
+    }
     await _byteStore.shutdown();
     await analyticsManager.shutdown();
     await shutdownPerfWitness();

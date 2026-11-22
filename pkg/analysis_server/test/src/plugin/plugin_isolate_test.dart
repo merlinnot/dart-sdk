@@ -9,6 +9,7 @@ import 'package:analysis_server/src/session_logger/session_logger.dart';
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/context/packages.dart';
 import 'package:analyzer/src/dart/analysis/context_root.dart';
+import 'package:analyzer/src/dart/analysis/linked_summary_coordinator.dart';
 import 'package:analyzer/src/workspace/basic.dart';
 import 'package:analyzer_plugin/channel/channel.dart';
 import 'package:analyzer_plugin/protocol/protocol.dart';
@@ -419,6 +420,61 @@ class PluginSessionTest with ResourceProviderMixin {
     expect(channel.sentRequests, hasLength(1));
     expect(channel.sentRequests[0].method, 'plugin.shutdown');
   }
+
+  Future<void> test_summaryReadersExitBeforeBrokerShutdown() async {
+    var directory = await io.Directory.systemTemp.createTemp();
+    var broker = LinkedSummaryBroker(
+      io.File(io.Platform.resolvedExecutable).parent.parent.path,
+    );
+    var sessions = PluginSummarySessions(broker);
+    var channel = TestServerCommunicationChannel(
+      session,
+      exitOnShutdown: false,
+    );
+    var reader = LinkedSummaryCoordinator(sessions.connect(session)!);
+    var stopping = PluginSession(pluginIsolate);
+    var stoppingChannel = TestServerCommunicationChannel(
+      stopping,
+      exitOnShutdown: false,
+    );
+    sessions.connect(stopping);
+    try {
+      // Root removal has already requested shutdown of the other session.
+      var alreadyStopping = stopping.stop();
+      var shutdown = sessions.shutdown();
+      expect(sessions.connect(PluginSession(pluginIsolate)), isNull);
+      expect(channel.sentRequests.single.method, 'plugin.shutdown');
+      expect(stoppingChannel.sentRequests.single.method, 'plugin.shutdown');
+      stopping.handleOnDone();
+      await alreadyStopping;
+
+      if (io.Platform.isMacOS) {
+        var entry = io.File.fromUri(directory.uri.resolve('entry.dart'))
+          ..writeAsStringSync('class Entry {}');
+        var result = await reader
+            .prepare(root: directory.path, paths: [entry.path])
+            .timeout(const Duration(seconds: 10));
+        expect(result, SummaryPreparationResult.prepared);
+      }
+
+      reader.close();
+      session.handleOnDone();
+      await shutdown;
+      expect(
+        await broker.prepare(root: directory.path, paths: []),
+        SummaryPreparationResult.unavailable,
+      );
+    } finally {
+      reader.close();
+      for (var pending in [stopping, session]) {
+        if (!pending.pluginStoppedCompleter.isCompleted) {
+          pending.handleOnDone();
+        }
+      }
+      await sessions.shutdown();
+      await directory.delete(recursive: true);
+    }
+  }
 }
 
 class TestServerCommunicationChannel implements ServerCommunicationChannel {
@@ -426,7 +482,9 @@ class TestServerCommunicationChannel implements ServerCommunicationChannel {
   int closeCount = 0;
   List<Request> sentRequests = <Request>[];
 
-  new(this.session) {
+  final bool exitOnShutdown;
+
+  new(this.session, {this.exitOnShutdown = true}) {
     session.channel = this;
   }
 
@@ -453,7 +511,7 @@ class TestServerCommunicationChannel implements ServerCommunicationChannel {
   @override
   void sendRequest(Request request) {
     sentRequests.add(request);
-    if (request.method == 'plugin.shutdown') {
+    if (exitOnShutdown && request.method == 'plugin.shutdown') {
       session.handleOnDone();
     }
   }
