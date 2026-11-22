@@ -161,6 +161,28 @@ MappedMemory* File::Map(MapType type,
   return new MappedMemory(addr, length, /*should_unmap=*/start == nullptr);
 }
 
+#if defined(DART_HOST_OS_LINUX)
+Dart_Handle File::MapReadOnlyShared(const char* path, intptr_t length) {
+  if (length <= 0) return Dart_Null();
+  int fd = TEMP_FAILURE_RETRY(open(path, O_RDONLY | O_CLOEXEC));
+  if (fd < 0) return Dart_Null();
+  struct stat64 statbuf;
+  void* address = MAP_FAILED;
+  if (fstat64_fixed(fd, &statbuf) == 0 && S_ISREG(statbuf.st_mode) &&
+      statbuf.st_size == length) {
+    address = mmap(nullptr, length, PROT_READ, MAP_SHARED, fd, 0);
+  }
+  close(fd);
+  if (address == MAP_FAILED) return Dart_Null();
+  auto* owner = new MappedMemory(address, length);
+  auto result = Dart_NewUnmodifiableExternalTypedDataWithFinalizer(
+      Dart_TypedData_kUint8, address, length, owner, 0,
+      [](void*, void* peer) { delete static_cast<MappedMemory*>(peer); });
+  if (Dart_IsError(result)) delete owner;
+  return result;
+}
+#endif  // defined(DART_HOST_OS_LINUX)
+
 void MappedMemory::Unmap() {
   int result = munmap(address_, size_);
   ASSERT(result == 0);

@@ -10,6 +10,7 @@ import 'dart:typed_data';
 
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
 import 'package:analyzer/src/dart/analysis/linked_summary_coordinator.dart';
+import 'package:analyzer/src/dart/analysis/mapped_summary.dart';
 import 'package:analyzer/src/dart/analysis/summary_arena.dart';
 import 'package:test/test.dart';
 
@@ -39,7 +40,7 @@ void main() {
       expect(store.get('a.linked'), [3]);
     });
 
-    if (!Platform.isMacOS) {
+    if (!supportsSummaryMapping) {
       return;
     }
 

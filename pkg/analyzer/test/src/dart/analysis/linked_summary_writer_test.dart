@@ -11,10 +11,11 @@ import 'package:analyzer/src/dart/analysis/byte_store.dart';
 import 'package:analyzer/src/dart/analysis/file_byte_store.dart';
 import 'package:analyzer/src/dart/analysis/linked_summary_coordinator.dart';
 import 'package:analyzer/src/dart/analysis/linked_summary_writer.dart';
+import 'package:analyzer/src/dart/analysis/mapped_summary.dart';
 import 'package:test/test.dart';
 
 void main() {
-  if (!Platform.isMacOS) {
+  if (!supportsSummaryMapping) {
     return;
   }
 

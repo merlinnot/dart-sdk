@@ -15,7 +15,7 @@ import 'package:analyzer/src/dart/analysis/summary_arena.dart';
 import 'package:test/test.dart';
 
 void main() {
-  if (!Platform.isMacOS) {
+  if (!supportsSummaryMapping) {
     test(
       'reports unsupported summary mappings on ${Platform.operatingSystem}',
       () {

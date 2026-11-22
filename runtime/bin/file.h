@@ -140,6 +140,11 @@ class File : public ReferenceCounted<File> {
   ///
   /// 'position' + 'length' may be larger than the file size. In this case, the
   /// extra memory is zero-filled.
+#if defined(DART_HOST_OS_LINUX)
+  // The external typed data owns the read-only view, including after unlink.
+  static Dart_Handle MapReadOnlyShared(const char* path, intptr_t length);
+#endif
+
   MappedMemory* Map(MapType type,
                     int64_t position,
                     int64_t length,

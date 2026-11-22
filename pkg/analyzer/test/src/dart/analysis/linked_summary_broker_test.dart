@@ -10,6 +10,7 @@ import 'package:analyzer/src/dart/analysis/analysis_context_collection.dart';
 import 'package:analyzer/src/dart/analysis/file_byte_store.dart';
 import 'package:analyzer/src/dart/analysis/library_context.dart';
 import 'package:analyzer/src/dart/analysis/linked_summary_coordinator.dart';
+import 'package:analyzer/src/dart/analysis/mapped_summary.dart';
 import 'package:analyzer/src/util/performance/operation_performance.dart';
 import 'package:test/test.dart';
 
@@ -56,7 +57,7 @@ void main() {
       },
     );
 
-    if (!Platform.isMacOS) {
+    if (!supportsSummaryMapping) {
       return;
     }
 

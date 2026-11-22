@@ -45,8 +45,9 @@ class LinkedSummaryCoordinator {
 
   /// The wire protocol version a plugin must recognize to use the broker.
   static const protocolVersion = 4;
-
   static const _producerIdleTimeout = Duration(seconds: 20);
+
+  static bool get isSupported => supportsSummaryMapping;
 
   final SendPort _broker;
   final _pending = <ReceivePort>{};
