@@ -153,7 +153,10 @@ class AnalysisSessionImpl implements AnalysisSession {
   }
 }
 
-/// The session of the libraries still attached to one element factory.
+/// A session reference shared by the libraries in a [LinkedElementFactory].
+///
+/// Replacing [current] moves all attached libraries to the new session.
+/// A library keeps its last session when it leaves the factory.
 final class LibraryElementSession {
   AnalysisSessionImpl current;
 

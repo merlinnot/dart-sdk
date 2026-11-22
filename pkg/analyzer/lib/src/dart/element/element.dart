@@ -6959,11 +6959,10 @@ class LibraryElementImpl extends ElementImpl
   late final LoadLibraryFunctionProvider loadLibraryProvider;
 
   String _name;
-
   int _nameOffset;
   int _nameLength;
-  List<ClassElementImpl> _classes = [];
 
+  List<ClassElementImpl> _classes = [];
   List<EnumElementImpl> _enums = [];
   List<ExtensionElementImpl> _extensions = [];
   List<ExtensionTypeElementImpl> _extensionTypes = [];
@@ -7564,7 +7563,7 @@ class LibraryElementImpl extends ElementImpl
     builder.writeLibraryElement(this);
   }
 
-  /// Removed libraries continue to describe the session in which they existed.
+  /// Keeps this library in its current session when the factory moves on.
   @trackedInternal
   void detachFromSessionUpdates() {
     _sessionReference = LibraryElementSession(_session);

@@ -41,10 +41,7 @@ class LinkedElementFactory {
     this.analysisContext,
     AnalysisSessionImpl analysisSession,
     this.rootReference,
-  ) : libraryElementSession = LibraryElementSession(analysisSession) {
-    ArgumentError.checkNotNull(analysisContext, 'analysisContext');
-    ArgumentError.checkNotNull(analysisSession, 'analysisSession');
-  }
+  ) : libraryElementSession = LibraryElementSession(analysisSession);
 
   AnalysisSessionImpl get analysisSession => libraryElementSession.current;
 
@@ -149,7 +146,7 @@ class LinkedElementFactory {
 
   void dispose() {
     for (var libraryReference in rootReference.children) {
-      _disposeLibrary(libraryReference.element);
+      _detachLibraryFromSessionUpdates(libraryReference.element);
     }
   }
 
@@ -214,7 +211,7 @@ class LinkedElementFactory {
       _libraryReaders.remove(uri);
       libraryManifests.remove(uri);
       var libraryReference = rootReference.removeLibrary(uri);
-      _disposeLibrary(libraryReference?.element);
+      _detachLibraryFromSessionUpdates(libraryReference?.element);
     }
 
     analysisSession.classHierarchy.removeOfLibraries(uriSet);
@@ -277,7 +274,7 @@ class LinkedElementFactory {
     return libraryElement;
   }
 
-  void _disposeLibrary(ElementImpl? libraryElement) {
+  void _detachLibraryFromSessionUpdates(ElementImpl? libraryElement) {
     if (libraryElement is LibraryElementImpl) {
       libraryElement.detachFromSessionUpdates();
     }
