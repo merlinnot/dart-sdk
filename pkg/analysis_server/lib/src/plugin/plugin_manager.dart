@@ -9,6 +9,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show ProcessResult, pid;
+import 'dart:isolate';
 
 import 'package:analysis_server/src/analytics/percentile_calculator.dart';
 import 'package:analysis_server/src/plugin/notification_manager.dart';
@@ -81,6 +82,8 @@ class PluginManager {
 
   /// The console environment key used by the pub tool.
   static const String _pubEnvironmentKey = 'PUB_ENVIRONMENT';
+
+  SendPort? linkedSummaryPort;
 
   /// The resource provider used to access the file system.
   final ResourceProvider _resourceProvider;
@@ -237,6 +240,7 @@ class PluginManager {
         _notificationManager,
         sessionListener,
         isLegacy: isLegacyPlugin,
+        linkedSummaryPort: isLegacyPlugin ? null : linkedSummaryPort,
       );
       try {
         sessionListener.logInfo('Starting plugin "$pluginIsolate"');
