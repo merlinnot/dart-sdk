@@ -76,7 +76,8 @@ class ContextBuilderImpl {
     AnalysisOptionsParseSession? analysisOptionsParseSession,
     ByteStore? byteStore,
     required ContextRootImpl contextRoot,
-    bool definedOptionsFile = false,
+    String? optionsFileOverride,
+    String? packageConfigOverride,
     DeclaredVariables? declaredVariables,
     bool drainStreams = true,
     bool enableIndex = false,
@@ -161,7 +162,7 @@ class ContextBuilderImpl {
     AnalysisOptionsMap analysisOptionsMap;
     // If there's an options file defined (as, e.g. passed into the
     // AnalysisContextCollection), use a shared options map based on it.
-    if (definedOptionsFile && optionsFile != null) {
+    if (optionsFileOverride != null && optionsFile != null) {
       analysisOptionsMap = AnalysisOptionsMap.forSharedOptions(
         _getAnalysisOptions(
           optionsFile,
@@ -195,6 +196,8 @@ class ContextBuilderImpl {
       analysisOptionsMap: analysisOptionsMap,
       packages: _createPackageMap(contextRoot: contextRoot),
       analysisContext: analysisContext,
+      optionsFileOverride: optionsFileOverride,
+      packageConfigOverride: packageConfigOverride,
       enableIndex: enableIndex,
       languageVersionOverride: languageVersionOverride,
       externalSummaries: summaryData,

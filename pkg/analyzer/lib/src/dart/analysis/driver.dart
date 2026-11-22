@@ -321,6 +321,11 @@ class AnalysisDriver {
 
   LinkedSummaryCoordinator? _summaryCoordinator;
 
+  // Reproduce the host's explicit overrides. Paths discovered by the host
+  // must be discovered again so nested options and packages remain visible.
+  final String? _optionsFileOverride;
+  final String? _packageConfigOverride;
+
   bool _waitingForEditorSummary = false;
   int _summaryGeneration = 0;
   final _changedSummaryFiles = <String>{};
@@ -340,6 +345,8 @@ class AnalysisDriver {
     required this.withFineDependencies,
     this.ownedFiles,
     this.analysisContext,
+    this._optionsFileOverride,
+    this._packageConfigOverride,
     required this.analysisOptionsMap,
     FileContentCache? fileContentCache,
     UnlinkedUnitStore? unlinkedUnitStore,
@@ -793,6 +800,12 @@ class AnalysisDriver {
   Future<void> dispose2() {
     var completer = Completer<void>();
     _disposed = true;
+    // A replacement driver starts with no pending file changes. Its first
+    // request must rediscover configuration, even if this driver fell back.
+    if (analysisContext != null) {
+      _scheduler.linkedSummaryCoordinator?.invalidateRoot(name);
+    }
+
     _editorIdleTimer?.cancel();
     _editorIdleTimer = null;
     _disposeRequests.add(completer);
@@ -2474,7 +2487,6 @@ class AnalysisDriver {
             .take(15),
     ];
     var generation = _summaryGeneration;
-    var root = analysisContext!.contextRoot;
     var changed = _changedSummaryFiles.toList();
     _changedSummaryFiles.clear();
     if (interactive) {
@@ -2487,8 +2499,8 @@ class AnalysisDriver {
           .prepare(
             root: name,
             paths: paths,
-            options: root.optionsFile?.path,
-            packages: root.packagesFile?.path,
+            options: _optionsFileOverride,
+            packages: _packageConfigOverride,
             variables: {
               for (var key in declaredVariables.variableNames)
                 key: declaredVariables.get(key)!,
