@@ -16,7 +16,16 @@ final class SummaryProducerContexts(final String _sdk, final ByteStore _store) {
 
   int get length => _contexts.length;
 
-  /// Applies scope-local overlays and refreshes disk changes across all scopes.
+  /// Releases the drivers owned by all cached scopes.
+  Future<void> dispose() async {
+    for (var context in _contexts.values) {
+      await context.discardCollection();
+    }
+    _contexts.clear();
+  }
+
+  /// Replaces the requesting scope's overlays with the complete snapshot in
+  /// [request]. Each scope sees disk edits to files it hasn't overlaid.
   Future<({AnalysisContextCollectionImpl collection, String scopeKey})> prepare(
     SummaryRequest request,
   ) async {
@@ -25,16 +34,17 @@ final class SummaryProducerContexts(final String _sdk, final ByteStore _store) {
       scopeKey,
       () => _ProducerContext(request.scope, _sdk, _store),
     );
-    var changedHere = context.updateOverlays(request.overlays)
-      ..addAll(request.changedFiles);
+    var overlayChanges = context.replaceOverlays(request.overlays);
+    var diskChanges = request.changedFiles;
 
-    if (changedHere.isNotEmpty) {
-      // Disk edits are visible to every scope. Overlays belong to this one.
-      for (var cached in _contexts.values) {
-        var changed = cached == context ? changedHere : request.changedFiles;
+    if (overlayChanges.isNotEmpty || diskChanges.isNotEmpty) {
+      await context.applyChanges(diskChanges, overlayChanges: overlayChanges);
+    }
 
-        if (changed.isNotEmpty) {
-          await cached.changeFiles(changed);
+    if (diskChanges.isNotEmpty) {
+      for (var other in _contexts.values) {
+        if (other != context) {
+          await other.applyChanges(diskChanges);
         }
       }
     }
@@ -55,23 +65,31 @@ final class _ProducerContext(
   final _files = OverlayResourceProvider(PhysicalResourceProvider.INSTANCE);
 
   AnalysisContextCollectionImpl? _collection;
-  Set<String> _optionsFiles = {};
+  Set<String> _optionsDependencies = {};
 
-  /// Creates drivers from the current overlays when configuration changes.
+  /// Builds drivers lazily from this scope's current view of the file system.
   AnalysisContextCollectionImpl get collection =>
       _collection ??= _createCollection();
 
-  Future<void> changeFiles(Iterable<String> changed) async {
+  Future<void> applyChanges(
+    List<String> diskChanges, {
+    Set<String> overlayChanges = const {},
+  }) async {
     var collection = _collection;
 
     if (collection == null) {
       return;
     }
 
-    // Both package resolution and analysis options are fixed at creation.
+    var changed = {
+      ...overlayChanges,
+      for (var path in diskChanges)
+        if (!_files.hasOverlay(path)) path,
+    };
+
+    // Drivers can refresh source files, but the collection owns configuration.
     if (changed.any(_affectsConfiguration)) {
-      _collection = null;
-      await collection.dispose();
+      await discardCollection();
       return;
     }
 
@@ -82,7 +100,14 @@ final class _ProducerContext(
     }
   }
 
-  Set<String> updateOverlays(Map<String, String> overlays) {
+  Future<void> discardCollection() async {
+    var collection = _collection;
+    _collection = null;
+    await collection?.dispose();
+  }
+
+  /// Returns paths whose overlay was added, edited, or removed.
+  Set<String> replaceOverlays(Map<String, String> overlays) {
     var changed = <String>{};
     var previous = _files.overlayContents;
 
@@ -110,19 +135,23 @@ final class _ProducerContext(
   bool _affectsConfiguration(String file) {
     if (file == scope.packages ||
         file == scope.options ||
-        _optionsFiles.contains(file)) {
+        _optionsDependencies.contains(file)) {
       return true;
     }
 
     // A newly created configuration can change which files the scope owns.
     var paths = _files.pathContext;
-    String directory;
+    var directory = switch (paths.basename(file)) {
+      file_paths.analysisOptionsYaml when scope.options == null =>
+        paths.dirname(file),
+      file_paths.pubspecYaml || file_paths.buildGn => paths.dirname(file),
+      file_paths.packageConfigJson
+          when file_paths.isPackageConfigJson(paths, file) =>
+        paths.dirname(paths.dirname(file)),
+      _ => null,
+    };
 
-    if (file_paths.isAnalysisOptionsYaml(paths, file)) {
-      directory = paths.dirname(file);
-    } else if (file_paths.isPackageConfigJson(paths, file)) {
-      directory = paths.dirname(paths.dirname(file));
-    } else {
+    if (directory == null) {
       return false;
     }
 
@@ -144,7 +173,7 @@ final class _ProducerContext(
       declaredVariables: scope.variables,
       withFineDependencies: true,
     );
-    _optionsFiles = {for (var file in options.attemptedFiles) file.path};
+    _optionsDependencies = {for (var file in options.attemptedFiles) file.path};
 
     return collection;
   }
