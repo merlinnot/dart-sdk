@@ -19,6 +19,7 @@ import 'file_byte_store_test.dart' as file_byte_store_test;
 import 'file_state_test.dart' as file_state;
 import 'fletcher16_test.dart' as fletcher16_test;
 import 'index_test.dart' as index;
+import 'linked_summary_contexts_test.dart' as linked_summary_contexts;
 import 'linked_summary_coordinator_test.dart' as linked_summary_coordinator;
 import 'linked_summary_protocol_test.dart' as linked_summary_protocol;
 import 'mapped_summary_test.dart' as mapped_summary;
@@ -50,6 +51,7 @@ main() {
     file_state.main();
     fletcher16_test.main();
     index.main();
+    linked_summary_contexts.main();
     linked_summary_coordinator.main();
     linked_summary_protocol.main();
     mapped_summary.main();
