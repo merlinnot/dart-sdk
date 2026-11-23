@@ -33,6 +33,9 @@ class Namespace : public ReferenceCounted<Namespace> {
   // is a _NamespaceImpl object. If it is not, calls Dart_PropagateError().
   static Namespace* GetNamespace(Dart_NativeArguments args, intptr_t index);
 
+  // Borrows the dart:io namespace held by the current isolate.
+  static Dart_Handle GetCurrentNamespace(Namespace** namespc);
+
   // Get and set the current working directory through the namespace if there
   // is one.
   static const char* GetCurrent(Namespace* namespc);
@@ -50,11 +53,7 @@ class Namespace : public ReferenceCounted<Namespace> {
 
   ~Namespace();
 
-  // When the native argument at |index| is a _NamespaceImpl object,
-  // write the valueof its native field into |namespc|.
-  static Dart_Handle GetNativeNamespaceArgument(Dart_NativeArguments args,
-                                                intptr_t index,
-                                                Namespace** namespc);
+  static Dart_Handle Unwrap(Dart_Handle namespc_obj, Namespace** namespc);
 
   // Given a namespace and a path, computes the information needed to access the
   // path relative to the namespace. This can include massaging the path and

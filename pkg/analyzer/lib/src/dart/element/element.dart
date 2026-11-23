@@ -6920,7 +6920,7 @@ class LibraryElementImpl extends ElementImpl
 
   String? _documentationComment;
 
-  AnalysisSessionImpl _session;
+  LibraryElementSession _sessionReference;
 
   /// The first (defining) fragment of this library.
   @override
@@ -7007,7 +7007,7 @@ class LibraryElementImpl extends ElementImpl
   /// the given [name] and [nameOffset].
   new(
     this._context,
-    this._session,
+    this._sessionReference,
     this._name,
     this._nameOffset,
     this._nameLength,
@@ -7415,10 +7415,6 @@ class LibraryElementImpl extends ElementImpl
     return _session;
   }
 
-  set session(AnalysisSessionImpl value) {
-    _session = value;
-  }
-
   @override
   @trackedDirectlyExpensive
   List<SetterElementImpl> get setters {
@@ -7498,6 +7494,8 @@ class LibraryElementImpl extends ElementImpl
     return result;
   }
 
+  AnalysisSessionImpl get _session => _sessionReference.current;
+
   @override
   @trackedDirectlyOpaque
   T? accept<T>(ElementVisitor2<T> visitor) {
@@ -7563,6 +7561,12 @@ class LibraryElementImpl extends ElementImpl
   @trackedIndirectly
   void appendTo(ElementDisplayStringBuilder builder) {
     builder.writeLibraryElement(this);
+  }
+
+  /// Keeps this library in its current session when the factory moves on.
+  @trackedInternal
+  void detachFromSessionUpdates() {
+    _sessionReference = LibraryElementSession(_session);
   }
 
   @override

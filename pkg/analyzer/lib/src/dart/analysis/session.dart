@@ -152,3 +152,13 @@ class AnalysisSessionImpl implements AnalysisSession {
     return _driver.getUnitElement(path);
   }
 }
+
+/// A session reference shared by the libraries in a [LinkedElementFactory].
+///
+/// Replacing [current] moves all attached libraries to the new session.
+/// A library keeps its last session when it leaves the factory.
+final class LibraryElementSession {
+  AnalysisSessionImpl current;
+
+  new(this.current);
+}

@@ -17,6 +17,8 @@
 #include <unistd.h>        // NOLINT
 #include <utime.h>         // NOLINT
 
+#include <memory>
+
 #include "bin/builtin.h"
 #include "bin/fdutils.h"
 #include "bin/namespace.h"
@@ -160,6 +162,45 @@ MappedMemory* File::Map(MapType type,
 
   return new MappedMemory(addr, length, /*should_unmap=*/start == nullptr);
 }
+
+#if defined(DART_HOST_OS_LINUX)
+Dart_Handle File::MapReadOnlyShared(const char* path, intptr_t length) {
+  if (length <= 0) {
+    return Dart_Null();
+  }
+
+  Namespace* namespc;
+  RETURN_IF_ERROR(Namespace::GetCurrentNamespace(&namespc));
+  NamespaceScope ns(namespc, path);
+  // Opening a FIFO must not block before fstat can reject it.
+  const int fd = TEMP_FAILURE_RETRY(
+      openat64(ns.fd(), ns.path(), O_RDONLY | O_CLOEXEC | O_NONBLOCK));
+  if (fd < 0) {
+    return Dart_Null();
+  }
+
+  struct stat64 statbuf;
+  void* address = MAP_FAILED;
+  if (fstat64_fixed(fd, &statbuf) == 0 && S_ISREG(statbuf.st_mode) &&
+      statbuf.st_size == length) {
+    address = mmap(nullptr, length, PROT_READ, MAP_SHARED, fd, 0);
+  }
+  close(fd);
+  if (address == MAP_FAILED) {
+    return Dart_Null();
+  }
+
+  auto mapping = std::make_unique<MappedMemory>(address, length);
+  Dart_Handle result = Dart_NewUnmodifiableExternalTypedDataWithFinalizer(
+      Dart_TypedData_kUint8, address, length, mapping.get(), 0,
+      [](void*, void* peer) { delete static_cast<MappedMemory*>(peer); });
+  if (!Dart_IsError(result)) {
+    mapping.release();  // The typed data finalizer now owns the mapping.
+  }
+
+  return result;
+}
+#endif  // defined(DART_HOST_OS_LINUX)
 
 void MappedMemory::Unmap() {
   int result = munmap(address_, size_);

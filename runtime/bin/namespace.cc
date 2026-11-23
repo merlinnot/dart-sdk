@@ -101,25 +101,28 @@ void FUNCTION_NAME(Namespace_GetPointer)(Dart_NativeArguments args) {
 
 Namespace* Namespace::GetNamespace(Dart_NativeArguments args, intptr_t index) {
   Namespace* namespc;
-  Dart_Handle status =
-      Namespace::GetNativeNamespaceArgument(args, index, &namespc);
+  Dart_Handle status = Unwrap(Dart_GetNativeArgument(args, index), &namespc);
   if (Dart_IsError(status)) {
     Dart_PropagateError(status);
   }
   return namespc;
 }
 
+Dart_Handle Namespace::GetCurrentNamespace(Namespace** namespc) {
+  ASSIGN_OR_RETURN(
+      Dart_Handle type,
+      DartUtils::GetDartType(DartUtils::kIOLibURL, "_NamespaceImpl"));
+  ASSIGN_OR_RETURN(Dart_Handle object,
+                   Dart_GetField(type, DartUtils::NewString("_namespace")));
+  return Unwrap(object, namespc);
+}
+
 bool Namespace::IsDefault(Namespace* namespc) {
   return (namespc == nullptr) || (namespc->namespc() == nullptr);
 }
 
-Dart_Handle Namespace::GetNativeNamespaceArgument(Dart_NativeArguments args,
-                                                  intptr_t index,
-                                                  Namespace** namespc) {
-  Dart_Handle namespc_obj = Dart_GetNativeArgument(args, index);
-  if (Dart_IsError(namespc_obj)) {
-    return namespc_obj;
-  }
+Dart_Handle Namespace::Unwrap(Dart_Handle namespc_obj, Namespace** namespc) {
+  RETURN_IF_ERROR(namespc_obj);
   DEBUG_ASSERT(IsNamespace(namespc_obj));
 
   Dart_Handle result =
