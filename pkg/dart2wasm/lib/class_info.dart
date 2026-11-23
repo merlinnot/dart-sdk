@@ -985,10 +985,13 @@ Map<Class, List<Range>> computeConcreteClassIdRanges(
     final cached = result[cls];
     if (cached != null) return cached;
 
+    final bounds = subclassRanges[cls] ?? const <Range>[];
     final ranges = <Range>[
-      ...?subclassRanges[cls],
+      ...bounds,
+      // A subclass can introduce implementors outside our own subclass ranges.
       for (final child in subclasses[cls] ?? const <Class>[])
-        ...rangesFor(child),
+        for (final range in rangesFor(child))
+          if (!bounds.any((bound) => bound.containsRange(range))) range,
       for (final child in implementors[cls] ?? const <Class>[])
         ...rangesFor(child),
     ]..normalize();

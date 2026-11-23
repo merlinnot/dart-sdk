@@ -10,6 +10,7 @@ import 'package:kernel/ast.dart';
 
 void main() {
   testImplementsChain();
+  testPartiallyCoveredSubclassRange();
   testOverlappingAndDisjointRanges();
 }
 
@@ -39,6 +40,29 @@ void testImplementsChain() {
     subclassRanges.reads <= 2 * length,
     'Read subclass ranges ${subclassRanges.reads} times for $length classes',
   );
+}
+
+void testPartiallyCoveredSubclassRange() {
+  final parent = newClass('Parent');
+  final child = newClass('Child');
+  final implementor = newClass('Implementor');
+  final ranges = computeConcreteClassIdRanges(
+    [parent, child, implementor],
+    subclassRanges: {
+      parent: [Range(2, 3)],
+      child: [Range(3, 3)],
+      implementor: [Range(4, 4)],
+    },
+    subclasses: {
+      parent: [child],
+    },
+    implementors: {
+      child: [implementor],
+    },
+  );
+
+  Expect.listEquals([Range(3, 4)], ranges[child]!);
+  Expect.listEquals([Range(2, 4)], ranges[parent]!);
 }
 
 void testOverlappingAndDisjointRanges() {
