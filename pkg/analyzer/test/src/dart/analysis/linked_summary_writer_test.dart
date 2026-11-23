@@ -14,7 +14,7 @@ import 'package:analyzer/src/dart/analysis/linked_summary_writer.dart';
 import 'package:test/test.dart';
 
 void main() {
-  if (!Platform.isMacOS) {
+  if (!LinkedSummaryCoordinator.isSupported) {
     return;
   }
 

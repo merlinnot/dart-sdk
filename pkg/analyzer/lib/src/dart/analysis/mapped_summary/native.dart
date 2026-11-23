@@ -12,7 +12,8 @@ import 'package:analyzer/src/dart/analysis/mapped_summary/windows.dart'
 import 'package:analyzer/src/dart/analysis/mapped_summary_stub.dart'
     as unsupported;
 
-bool get supportsSummaryMapping => Platform.isMacOS;
+bool get supportsSummaryMapping =>
+    Platform.isMacOS || (Platform.isLinux && linux.supportsSummaryMapping);
 
 Uint8List mapSummaryFile(String path, int length) =>
     switch (Platform.operatingSystem) {

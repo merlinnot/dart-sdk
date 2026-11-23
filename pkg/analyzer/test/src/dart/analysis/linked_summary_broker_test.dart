@@ -56,7 +56,7 @@ void main() {
       },
     );
 
-    if (!Platform.isMacOS) {
+    if (!LinkedSummaryCoordinator.isSupported) {
       return;
     }
 

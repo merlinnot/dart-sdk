@@ -39,7 +39,7 @@ void main() {
       expect(store.get('a.linked'), [3]);
     });
 
-    if (!Platform.isMacOS) {
+    if (!LinkedSummaryCoordinator.isSupported) {
       return;
     }
 
