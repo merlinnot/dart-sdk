@@ -44,8 +44,8 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
   /// [onConfigurationDependency] also reports paths consulted when choosing
   /// the SDK or workspace, including configuration that does not yet exist.
   ///
-  /// A newly created scheduler uses [linkedSummaryCoordinator]. A supplied
-  /// [scheduler] already owns its coordinator.
+  /// A newly created scheduler uses [linkedSummaryCoordinator] and
+  /// [reportResolvedLibraries]. A supplied [scheduler] keeps its configuration.
   new({
     AnalysisOptionsParseSession? analysisOptionsParseSession,
     void Function(String path)? onConfigurationDependency,
@@ -63,6 +63,7 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
     PerformanceLog? performanceLog,
     ResourceProvider? resourceProvider,
     bool retainDataForTesting = false,
+    bool reportResolvedLibraries = false,
     String? sdkPath,
     String? sdkSummaryPath,
     AnalysisDriverScheduler? scheduler,
@@ -83,6 +84,7 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
       scheduler = AnalysisDriverScheduler(
         performanceLog,
         linkedSummaryCoordinator: linkedSummaryCoordinator,
+        reportResolvedLibraries: reportResolvedLibraries,
       );
       if (drainStreams) {
         unawaited(scheduler.events.drain<void>());

@@ -1119,7 +1119,7 @@ class AnalysisDriver {
       return Future.value(DisposedAnalysisContextResult());
     }
 
-    if (_resolvedLibraryCache[path] case var cached?) {
+    if (_getCachedResolvedLibrary(path) case var cached?) {
       return cached;
     }
 
@@ -1650,6 +1650,10 @@ class AnalysisDriver {
         // getResolvedLibrary()
         _requestedLibraries.completeAll(library.file.path, libraryResult);
 
+        if (_scheduler.reportResolvedLibraries) {
+          _scheduler.eventsController.add(libraryResult);
+        }
+
         // Return the result, full or partial.
         _logger.writeln('Computed new analysis result.');
         return libraryResult;
@@ -1951,6 +1955,16 @@ class AnalysisDriver {
     }
   }
 
+  ResolvedLibraryResultImpl? _getCachedResolvedLibrary(String path) {
+    var cached = _resolvedLibraryCache[path];
+    if (cached != null &&
+        !hasPendingFileChanges &&
+        cached.session == currentSession) {
+      return cached;
+    }
+    return null;
+  }
+
   /// Return [Diagnostic]s for the given [serialized] diagnostics.
   List<Diagnostic> _getDiagnosticsFromSerialized(
     FileState file,
@@ -2209,7 +2223,7 @@ class AnalysisDriver {
         throw UnimplementedError('(${kind.runtimeType}) $kind');
     }
 
-    if (_resolvedLibraryCache[path] case var cached?) {
+    if (_getCachedResolvedLibrary(path) case var cached?) {
       _requestedLibraries.completeAll(path, cached);
       return;
     }
@@ -2903,6 +2917,9 @@ class AnalysisDriverScheduler {
   /// Prepares missing linked summaries for drivers that can share them.
   final LinkedSummaryCoordinator? linkedSummaryCoordinator;
 
+  /// Whether to also report complete [ResolvedLibraryResult]s in [events].
+  final bool reportResolvedLibraries;
+
   /// The controller for [events] stream.
   final StreamController<Object> eventsController = StreamController<Object>();
 
@@ -2942,6 +2959,7 @@ class AnalysisDriverScheduler {
     this.driverWatcher,
     this.shouldDiscardMemoryExpensiveDataOnIdle = true,
     this.linkedSummaryCoordinator,
+    this.reportResolvedLibraries = false,
   });
 
   /// The [Stream] that produces analysis results for all drivers, and status
@@ -2970,6 +2988,11 @@ class AnalysisDriverScheduler {
   /// [ResolvedUnitResult]s are produced for every analyzed file. Currently
   /// to analyze a file of a library, the whole library is analyzed, all its
   /// files - the defining unit, augmentations, and parts.
+  ///
+  /// When [reportResolvedLibraries] is enabled, a [ResolvedLibraryResult]
+  /// follows the individual unit results for each newly resolved library.
+  /// The defining unit appears first in the library result. Cached diagnostics
+  /// still produce only [ErrorsResult]s.
   ///
   /// A file requires analysis if:
   /// 1. It was requested by [AnalysisDriver.getResolvedUnit] or
