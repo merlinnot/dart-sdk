@@ -12,6 +12,7 @@ import 'package:analyzer/src/summary2/combinator.dart';
 import 'package:analyzer/src/summary2/export.dart';
 import 'package:analyzer/src/utilities/extensions/collection.dart';
 import 'package:analyzer/src/utilities/extensions/string.dart';
+import 'package:meta/meta.dart';
 
 typedef _ImportSource = ({
   LibraryImportImpl directive,
@@ -275,7 +276,7 @@ class ImportsTrackingOfPrefix {
         export != null;
         export = export.next
       ) {
-        if (export.element == element &&
+        if (export.entry.reference.element == element &&
             importedLibrary.isFromDeprecatedExport(export.entry)) {
           result ??= accessedElements.toSet();
           result.remove(element);
@@ -331,7 +332,7 @@ class ImportsTrackingOfPrefix {
         export != null;
         export = export.next
       ) {
-        if (export.element == element &&
+        if (export.entry.reference.element == element &&
             source.combinators.allows(export.entry.name)) {
           (importToUsedElements[source.directive] ??= {}).add(element);
           found = true;
@@ -668,28 +669,29 @@ class PrefixScope implements Scope {
   }) : _prefixElement = prefix {
     for (var import in libraryImports) {
       var importedUri = import.uri;
-      if (importedUri is DirectiveUriWithLibraryImpl &&
-          import.prefix?.element == prefix) {
-        var importedLibrary = importedUri.library;
-        _importedLibraries.add(importedLibrary);
-        var combinators = import.combinators.build();
-        var exports = importedLibrary.sharedExportIndex;
-        _sources.add((
-          directive: import,
-          library: importedLibrary,
-          exports: exports,
-          combinators: combinators,
-        ));
-        for (var extension in exports._extensions.reversed) {
-          if (combinators.allows(extension.entry.name)) {
-            _extensions.add(extension.element as ExtensionElement);
-          }
+      if (importedUri is! DirectiveUriWithLibraryImpl ||
+          import.prefix?.element != prefix) {
+        continue;
+      }
+
+      var importedLibrary = importedUri.library;
+      var source = (
+        directive: import,
+        library: importedLibrary,
+        exports: importedLibrary.sharedExportIndex,
+        combinators: import.combinators.build(),
+      );
+      _importedLibraries.add(importedLibrary);
+      _sources.add(source);
+
+      for (var entry in source.exports.extensionEntries) {
+        if (source.combinators.allows(entry.name)) {
+          _extensions.add(source.resolve(entry) as ExtensionElement);
         }
-        if (import.prefix case var importPrefix?) {
-          if (importPrefix.isDeferred) {
-            _deferredLibrary ??= importedLibrary;
-          }
-        }
+      }
+
+      if (import.prefix?.isDeferred ?? false) {
+        _deferredLibrary ??= importedLibrary;
       }
     }
   }
@@ -846,12 +848,14 @@ class PrefixScope implements Scope {
         export != null;
         export = export.next
       ) {
-        if (source.combinators.allows(export.entry.name) &&
-            _shouldAdd(source.library, export.element)) {
-          _add(
-            export.element,
-            source.library.isFromDeprecatedExport(export.entry),
-          );
+        var entry = export.entry;
+        if (!source.combinators.allows(entry.name)) {
+          continue;
+        }
+
+        var element = source.resolve(entry);
+        if (_shouldAdd(source.library, element)) {
+          _add(element, source.library.isFromDeprecatedExport(entry));
         }
       }
     }
@@ -1008,21 +1012,32 @@ class ScopeLookupResultImpl extends ScopeLookupResult {
 }
 
 /// The export names of one library, shared by all importing scopes.
+///
+/// Indexing references keeps transitively exported libraries unloaded until
+/// an importing scope needs their elements.
 class SharedExportIndex {
   final _byName = <String, _SharedExport>{};
-  final _extensions = <_SharedExport>[];
+  final _extensionEntries = <ExportEntry>[];
 
-  new(LibraryElementImpl library) {
-    var factory = library.internal.elementFactory;
+  new(List<ExportEntry> entries) {
     // Preserve export order if multiple entries have the same display name.
-    for (var entry in library.exportEntries.reversed) {
-      var element = factory.elementOfReference3(entry.reference);
-      var id = element.displayName;
-      var export = _SharedExport(entry, element, _byName[id]);
-      _byName[id] = export;
-      if (element is ExtensionElement) {
-        _extensions.add(export);
+    for (var entry in entries.reversed) {
+      var displayName = entry.name.removeSuffixOrSelf('=');
+      _byName[displayName] = _SharedExport(entry, _byName[displayName]);
+      if (entry.reference.isExtension) {
+        _extensionEntries.add(entry);
       }
+    }
+  }
+
+  /// The exported extensions in their original export order.
+  Iterable<ExportEntry> get extensionEntries => _extensionEntries.reversed;
+
+  /// The entries for [displayName] in the order an importing scope visits them.
+  @visibleForTesting
+  Iterable<ExportEntry> entriesForTesting(String displayName) sync* {
+    for (var node = _byName[displayName]; node != null; node = node.next) {
+      yield node.entry;
     }
   }
 }
@@ -1137,10 +1152,9 @@ mixin _GettersAndSetters {
 
 class _SharedExport {
   final ExportEntry entry;
-  final Element element;
   final _SharedExport? next;
 
-  new(this.entry, this.element, this.next);
+  new(this.entry, this.next);
 }
 
 extension on LibraryFragmentImpl {
@@ -1152,5 +1166,11 @@ extension on LibraryFragmentImpl {
       return !library.featureSet.isEnabled(Feature.wildcard_variables);
     }
     return true;
+  }
+}
+
+extension on _ImportSource {
+  ElementImpl resolve(ExportEntry entry) {
+    return library.internal.elementFactory.elementOfReference3(entry.reference);
   }
 }

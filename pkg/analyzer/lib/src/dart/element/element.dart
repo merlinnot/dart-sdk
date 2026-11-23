@@ -7439,7 +7439,7 @@ class LibraryElementImpl extends ElementImpl
 
   @trackedInternal
   SharedExportIndex get sharedExportIndex =>
-      _sharedExportIndex ??= SharedExportIndex(this);
+      _sharedExportIndex ??= SharedExportIndex(exportEntries);
 
   // TODO(scheglov): prefer `firstFragment.source`
   @trackedIncludedInId
