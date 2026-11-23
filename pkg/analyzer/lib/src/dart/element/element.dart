@@ -6943,18 +6943,6 @@ class LibraryElementImpl extends ElementImpl
   SharedExportIndex? _sharedExportIndex;
   late List<ExportEntry> _exportEntries;
 
-  @trackedInternal
-  SharedExportIndex get sharedExportIndex =>
-      _sharedExportIndex ??= SharedExportIndex(this);
-
-  @trackedInternal
-  List<ExportEntry> get exportEntries => _exportEntries;
-
-  set exportEntries(List<ExportEntry> entries) {
-    _sharedExportIndex = null;
-    _exportEntries = entries;
-  }
-
   /// The union of names for all searchable elements in this library.
   @trackedInternal
   ElementNameUnion nameUnion = ElementNameUnion.empty();
@@ -6971,12 +6959,15 @@ class LibraryElementImpl extends ElementImpl
   late final LoadLibraryFunctionProvider loadLibraryProvider;
 
   String _name;
+
   int _nameOffset;
+
   int _nameLength;
 
   List<ClassElementImpl> _classes = [];
   List<EnumElementImpl> _enums = [];
   List<ExtensionElementImpl> _extensions = [];
+
   List<ExtensionTypeElementImpl> _extensionTypes = [];
   List<GetterElementImpl> _getters = [];
   List<SetterElementImpl> _setters = [];
@@ -7125,6 +7116,14 @@ class LibraryElementImpl extends ElementImpl
         .nonNulls
         .toSet()
         .toList();
+  }
+
+  @trackedInternal
+  List<ExportEntry> get exportEntries => _exportEntries;
+
+  set exportEntries(List<ExportEntry> entries) {
+    _sharedExportIndex = null;
+    _exportEntries = entries;
   }
 
   @override
@@ -7437,6 +7436,10 @@ class LibraryElementImpl extends ElementImpl
   set setters(List<SetterElementImpl> value) {
     _setters = value;
   }
+
+  @trackedInternal
+  SharedExportIndex get sharedExportIndex =>
+      _sharedExportIndex ??= SharedExportIndex(this);
 
   // TODO(scheglov): prefer `firstFragment.source`
   @trackedIncludedInId
