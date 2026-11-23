@@ -5,92 +5,60 @@
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/src/dart/ast/ast.dart';
 
-/// Compute the [DefinedNames] for the given [unit].
-DefinedNames computeDefinedNames(CompilationUnitImpl unit) {
-  DefinedNames names = DefinedNames();
+/// Returns the names of class members declared in [unit].
+Set<String> computeDefinedClassMemberNames(CompilationUnitImpl unit) {
+  var names = <String>{};
 
-  void appendName(Set<String> names, Token? token) {
+  void addName(Token? token) {
     var lexeme = token?.lexeme;
     if (lexeme != null && lexeme.isNotEmpty) {
       names.add(lexeme);
     }
   }
 
-  void appendClassMemberName(MemberDeclarationImpl member) {
+  void addMember(MemberDeclarationImpl member) {
     if (member is MethodDeclarationV1OriginImpl) {
-      appendName(names.classMemberNames, member.nameToken);
+      addName(member.nameToken);
     } else if (member is FieldsDeclarationImpl) {
       for (var field in member.fields) {
-        appendName(names.classMemberNames, field.name);
+        addName(field.name);
       }
     }
   }
 
-  void appendDeclaringFormalParameterNames(
-    PrimaryConstructorDeclarationImpl constructor,
-  ) {
-    for (var parameter in constructor.declaringFormalParameters) {
-      appendName(names.classMemberNames, parameter.name);
+  void addDeclaringParameters(ClassNamePartImpl namePart) {
+    if (namePart is PrimaryConstructorDeclarationImpl) {
+      for (var parameter in namePart.declaringFormalParameters) {
+        addName(parameter.name);
+      }
     }
   }
 
-  void appendTopLevelName(TopLevelDeclarationImpl member) {
-    switch (member) {
-      case ClassDeclaration2Impl():
-        appendName(names.topLevelNames, member.namePart.typeName);
-        if (member.namePart
-            case PrimaryConstructorDeclarationImpl constructor) {
-          appendDeclaringFormalParameterNames(constructor);
+  for (var declaration in unit.declarations2) {
+    switch (declaration) {
+      case ClassDeclaration2Impl(:var namePart, :var body) ||
+          ExtensionTypeDeclaration2Impl(:var namePart, :var body):
+        addDeclaringParameters(namePart);
+        body.members.forEach(addMember);
+      case EnumDeclaration2Impl(:var namePart, :var body):
+        addDeclaringParameters(namePart);
+        for (var constant in body.constants) {
+          addName(constant.name);
         }
-        member.body.members.forEach(appendClassMemberName);
-      case EnumDeclaration2Impl():
-        appendName(names.topLevelNames, member.namePart.typeName);
-        if (member.namePart
-            case PrimaryConstructorDeclarationImpl constructor) {
-          appendDeclaringFormalParameterNames(constructor);
-        }
-        for (var constant in member.body.constants) {
-          appendName(names.classMemberNames, constant.name);
-        }
-        member.body.members.forEach(appendClassMemberName);
-      case ExtensionDeclaration2Impl():
-        appendName(names.topLevelNames, member.name);
-        member.body.members.forEach(appendClassMemberName);
-      case ExtensionTypeDeclaration2Impl():
-        appendName(names.topLevelNames, member.namePart.typeName);
-        if (member.namePart
-            case PrimaryConstructorDeclarationImpl primaryConstructor) {
-          appendDeclaringFormalParameterNames(primaryConstructor);
-        }
-        member.body.members.forEach(appendClassMemberName);
-      case MixinDeclaration2Impl():
-        appendName(names.topLevelNames, member.name);
-        member.body.members.forEach(appendClassMemberName);
-      case TopLevelFunctionDeclarationImpl():
-        appendName(names.topLevelNames, member.name);
-      case TopLevelVariablesDeclarationImpl():
-        for (var variable in member.variables) {
-          appendName(names.topLevelNames, variable.name);
-        }
-      case TopLevelGetterDeclarationImpl():
-        appendName(names.topLevelNames, member.name);
-      case TopLevelSetterDeclarationImpl():
-        appendName(names.topLevelNames, member.name);
-      case ClassTypeAlias2Impl():
-        appendName(names.topLevelNames, member.name);
-      case FunctionTypeAlias2Impl():
-        appendName(names.topLevelNames, member.name);
-      case GenericTypeAlias2Impl():
-        appendName(names.topLevelNames, member.name);
+        body.members.forEach(addMember);
+      case ExtensionDeclaration2Impl(:var body) ||
+          MixinDeclaration2Impl(:var body):
+        body.members.forEach(addMember);
+      case ClassTypeAlias2Impl() ||
+          FunctionTypeAlias2Impl() ||
+          GenericTypeAlias2Impl() ||
+          TopLevelFunctionDeclarationImpl() ||
+          TopLevelGetterDeclarationImpl() ||
+          TopLevelSetterDeclarationImpl() ||
+          TopLevelVariablesDeclarationImpl():
+        break;
     }
   }
 
-  unit.declarations2.forEach(appendTopLevelName);
   return names;
-}
-
-/// Defined top-level and class member names.
-class DefinedNames {
-  final Set<String> topLevelNames = <String>{};
-  final Set<String> classMemberNames = <String>{};
 }

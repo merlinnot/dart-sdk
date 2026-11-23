@@ -18,7 +18,7 @@ main() {
 @reflectiveTest
 class DefinedNamesTest extends ParserDiagnosticsTest {
   test_classMemberNames_class() {
-    var names = _computeDefinedNames('''
+    var names = _computeNames('''
 class A {
   int a, b;
   A();
@@ -31,71 +31,61 @@ class B {
   g() {}
 }
 ''');
-    expect(names.topLevelNames, unorderedEquals(['A', 'B']));
-    expect(
-      names.classMemberNames,
-      unorderedEquals(['a', 'b', 'd', 'e', 'f', 'g']),
-    );
+    expect(names, unorderedEquals(['a', 'b', 'd', 'e', 'f', 'g']));
   }
 
   test_classMemberNames_class_primaryConstructor_named() {
-    var names = _computeDefinedNames('''
+    var names = _computeNames('''
 class A.named(final int a1, int a2, var a3);
 ''');
-    expect(names.topLevelNames, unorderedEquals(['A']));
-    expect(names.classMemberNames, unorderedEquals(['a1', 'a3']));
+    expect(names, unorderedEquals(['a1', 'a3']));
   }
 
   test_classMemberNames_class_primaryConstructor_unnamed() {
-    var names = _computeDefinedNames('''
+    var names = _computeNames('''
 class A(final int a1, int a2, var a3);
 ''');
-    expect(names.topLevelNames, unorderedEquals(['A']));
-    expect(names.classMemberNames, unorderedEquals(['a1', 'a3']));
+    expect(names, unorderedEquals(['a1', 'a3']));
   }
 
   test_classMemberNames_enum() {
-    var names = _computeDefinedNames('''
+    var names = _computeNames('''
 enum E {
   v1, v2;
   final int d = 0;
   void e() {}
 }
 ''');
-    expect(names.topLevelNames, unorderedEquals(['E']));
-    expect(names.classMemberNames, unorderedEquals(['v1', 'v2', 'd', 'e']));
+    expect(names, unorderedEquals(['v1', 'v2', 'd', 'e']));
   }
 
   test_classMemberNames_enum_empty() {
-    var names = _computeDefinedNames('''
+    var names = _computeNames('''
 enum E;
 ''');
-    expect(names.topLevelNames, unorderedEquals(['E']));
-    expect(names.classMemberNames, isEmpty);
+    expect(names, isEmpty);
   }
 
   test_classMemberNames_enum_primaryConstructor_named() {
-    var names = _computeDefinedNames('''
+    var names = _computeNames('''
 enum E.named(final int a1, int a2, var a3) {
   v1.named(1, 2, 3), v2.named(4, 5, 6);
 }
 ''');
-    expect(names.topLevelNames, unorderedEquals(['E']));
-    expect(names.classMemberNames, unorderedEquals(['v1', 'v2', 'a1', 'a3']));
+    expect(names, unorderedEquals(['v1', 'v2', 'a1', 'a3']));
   }
 
   test_classMemberNames_enum_primaryConstructor_unnamed() {
-    var names = _computeDefinedNames('''
+    var names = _computeNames('''
 enum E(final int a1, int a2, var a3) {
   v1(1, 2, 3), v2(4, 5, 6);
 }
 ''');
-    expect(names.topLevelNames, unorderedEquals(['E']));
-    expect(names.classMemberNames, unorderedEquals(['v1', 'v2', 'a1', 'a3']));
+    expect(names, unorderedEquals(['v1', 'v2', 'a1', 'a3']));
   }
 
   test_classMemberNames_extension() {
-    var names = _computeDefinedNames('''
+    var names = _computeNames('''
 extension E on int {
   int a;
   void b() {}
@@ -103,30 +93,27 @@ extension E on int {
   set d(int _) {}
 }
 ''');
-    expect(names.topLevelNames, unorderedEquals(['E']));
-    expect(names.classMemberNames, unorderedEquals(['a', 'b', 'c', 'd']));
+    expect(names, unorderedEquals(['a', 'b', 'c', 'd']));
   }
 
   test_classMemberNames_extension_empty() {
-    var names = _computeDefinedNames('''
+    var names = _computeNames('''
 extension E on int;
 ''');
-    expect(names.topLevelNames, unorderedEquals(['E']));
-    expect(names.classMemberNames, isEmpty);
+    expect(names, isEmpty);
   }
 
   test_classMemberNames_extensionType_primaryConstructor_multipleFormalParameters() {
-    var names = _computeDefinedNames('''
+    var names = _computeNames('''
 extension type A(int it1, final int it2, int it3) {
   void foo() {}
 }
 ''');
-    expect(names.topLevelNames, unorderedEquals(['A']));
-    expect(names.classMemberNames, unorderedEquals(['it1', 'it2', 'foo']));
+    expect(names, unorderedEquals(['it1', 'it2', 'foo']));
   }
 
   test_classMemberNames_extensionType_primaryConstructor_named() {
-    var names = _computeDefinedNames('''
+    var names = _computeNames('''
 extension type A.named(int it) {
   int a, b;
   A();
@@ -136,25 +123,20 @@ extension type A.named(int it) {
   set f(int _) {}
 }
 ''');
-    expect(names.topLevelNames, unorderedEquals(['A']));
-    expect(
-      names.classMemberNames,
-      unorderedEquals(['it', 'a', 'b', 'd', 'e', 'f']),
-    );
+    expect(names, unorderedEquals(['it', 'a', 'b', 'd', 'e', 'f']));
   }
 
   test_classMemberNames_extensionType_primaryConstructor_unnamed() {
-    var names = _computeDefinedNames('''
+    var names = _computeNames('''
 extension type A(int it) {
   void foo() {}
 }
 ''');
-    expect(names.topLevelNames, unorderedEquals(['A']));
-    expect(names.classMemberNames, unorderedEquals(['it', 'foo']));
+    expect(names, unorderedEquals(['it', 'foo']));
   }
 
   test_classMemberNames_mixin() {
-    var names = _computeDefinedNames('''
+    var names = _computeNames('''
 mixin A {
   int a, b;
   d() {}
@@ -165,23 +147,18 @@ mixin B {
   g() {}
 }
 ''');
-    expect(names.topLevelNames, unorderedEquals(['A', 'B']));
-    expect(
-      names.classMemberNames,
-      unorderedEquals(['a', 'b', 'd', 'e', 'f', 'g']),
-    );
+    expect(names, unorderedEquals(['a', 'b', 'd', 'e', 'f', 'g']));
   }
 
   test_classMemberNames_mixin_empty() {
-    var names = _computeDefinedNames('''
+    var names = _computeNames('''
 mixin M;
 ''');
-    expect(names.topLevelNames, unorderedEquals(['M']));
-    expect(names.classMemberNames, isEmpty);
+    expect(names, isEmpty);
   }
 
-  test_topLevelNames() {
-    var names = _computeDefinedNames('''
+  test_classMemberNames_topLevelDeclarations() {
+    var names = _computeNames('''
 class A {}
 class B = Object with A;
 typedef C();
@@ -191,16 +168,12 @@ set F(_) {}
 var G, H;
 mixin M {}
 ''');
-    expect(
-      names.topLevelNames,
-      unorderedEquals(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'M']),
-    );
-    expect(names.classMemberNames, isEmpty);
+    expect(names, isEmpty);
   }
 
-  DefinedNames _computeDefinedNames(String code) {
+  Set<String> _computeNames(String code) {
     var parseResult = parseTestCodeWithDiagnostics(code);
     var unit = parseResult.unit as CompilationUnitImpl;
-    return computeDefinedNames(unit);
+    return computeDefinedClassMemberNames(unit);
   }
 }

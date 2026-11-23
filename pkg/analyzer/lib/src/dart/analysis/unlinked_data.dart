@@ -12,9 +12,6 @@ class AnalysisDriverUnlinkedUnit {
   /// Set of class member names defined by the unit.
   final Set<String> definedClassMemberNames;
 
-  /// Set of top-level names defined by the unit.
-  final Set<String> definedTopLevelNames;
-
   /// Set of external names referenced by the unit.
   final Set<String> referencedNames;
 
@@ -27,7 +24,6 @@ class AnalysisDriverUnlinkedUnit {
 
   new({
     required this.definedClassMemberNames,
-    required this.definedTopLevelNames,
     required this.referencedNames,
     required this.subtypedNames,
     required this.unit,
@@ -40,7 +36,6 @@ class AnalysisDriverUnlinkedUnit {
   factory read(BinaryReader reader) {
     return AnalysisDriverUnlinkedUnit(
       definedClassMemberNames: reader.readStringUtf8Set(),
-      definedTopLevelNames: reader.readStringUtf8Set(),
       referencedNames: reader.readStringUtf8Set(),
       subtypedNames: reader.readStringUtf8Set(),
       unit: UnlinkedUnit.read(reader),
@@ -55,7 +50,6 @@ class AnalysisDriverUnlinkedUnit {
 
   void write(BinaryWriter writer) {
     writer.writeStringUtf8Iterable(definedClassMemberNames);
-    writer.writeStringUtf8Iterable(definedTopLevelNames);
     writer.writeStringUtf8Iterable(referencedNames);
     writer.writeStringUtf8Iterable(subtypedNames);
     unit.write(writer);
