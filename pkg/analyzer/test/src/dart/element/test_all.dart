@@ -26,6 +26,7 @@ import 'non_covariant_type_parameter_position_test.dart'
     as non_covariant_type_parameter_position;
 import 'normalize_type_test.dart' as normalize_type;
 import 'nullable_test.dart' as nullable;
+import 'prefix_scope_test.dart' as prefix_scope;
 import 'replace_top_bottom_test.dart' as replace_top_bottom;
 import 'resolve_to_bound_test.dart' as resolve_to_bound;
 import 'runtime_type_equality_test.dart' as runtime_type_equality;
@@ -64,6 +65,7 @@ main() {
     non_covariant_type_parameter_position.main();
     normalize_type.main();
     nullable.main();
+    prefix_scope.main();
     replace_top_bottom.main();
     resolve_to_bound.main();
     runtime_type_equality.main();

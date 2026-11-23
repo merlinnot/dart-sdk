@@ -16,6 +16,9 @@ final class BuiltInReference extends Reference implements ExportableReference {
   final _BuiltInReferenceKind _kind;
 
   new _({required this.library, required this._kind}) : super._();
+
+  @override
+  bool get isExtension => false;
 }
 
 sealed class DeclarationReference extends Reference {
@@ -30,7 +33,10 @@ sealed class DeclarationReference extends Reference {
   new _({required this._key}) : super._();
 }
 
-sealed class ExportableReference implements Reference {}
+sealed class ExportableReference implements Reference {
+  /// Whether this reference denotes an extension declaration.
+  bool get isExtension;
+}
 
 final class LeafTopLevelReference extends TopLevelReference {
   new _({required super.library, required super.key, required super.kind})
@@ -831,6 +837,9 @@ sealed class TopLevelReference extends DeclarationReference
 
   new _({required this.library, required super.key, required this._kind})
     : super._();
+
+  @override
+  bool get isExtension => _kind == _TopLevelReferenceKind.extension_;
 }
 
 enum _BuiltInReferenceKind {
