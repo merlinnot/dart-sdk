@@ -669,30 +669,29 @@ class PrefixScope implements Scope {
   }) : _prefixElement = prefix {
     for (var import in libraryImports) {
       var importedUri = import.uri;
-      if (importedUri is DirectiveUriWithLibraryImpl &&
-          import.prefix?.element == prefix) {
-        var importedLibrary = importedUri.library;
-        _importedLibraries.add(importedLibrary);
-        var combinators = import.combinators.build();
-        var exports = importedLibrary.sharedExportIndex;
-        _sources.add((
-          directive: import,
-          library: importedLibrary,
-          exports: exports,
-          combinators: combinators,
-        ));
-        for (var extension in exports._extensions.reversed) {
-          if (combinators.allows(extension.name)) {
-            var element = importedLibrary.internal.elementFactory
-                .elementOfReference3(extension.reference);
-            _extensions.add(element as ExtensionElement);
-          }
+      if (importedUri is! DirectiveUriWithLibraryImpl ||
+          import.prefix?.element != prefix) {
+        continue;
+      }
+
+      var importedLibrary = importedUri.library;
+      var source = (
+        directive: import,
+        library: importedLibrary,
+        exports: importedLibrary.sharedExportIndex,
+        combinators: import.combinators.build(),
+      );
+      _importedLibraries.add(importedLibrary);
+      _sources.add(source);
+
+      for (var entry in source.exports.extensionEntries) {
+        if (source.combinators.allows(entry.name)) {
+          _extensions.add(source.resolve(entry) as ExtensionElement);
         }
-        if (import.prefix case var importPrefix?) {
-          if (importPrefix.isDeferred) {
-            _deferredLibrary ??= importedLibrary;
-          }
-        }
+      }
+
+      if (import.prefix?.isDeferred ?? false) {
+        _deferredLibrary ??= importedLibrary;
       }
     }
   }
@@ -854,8 +853,7 @@ class PrefixScope implements Scope {
           continue;
         }
 
-        var element = source.library.internal.elementFactory
-            .elementOfReference3(entry.reference);
+        var element = source.resolve(entry);
         if (_shouldAdd(source.library, element)) {
           _add(element, source.library.isFromDeprecatedExport(entry));
         }
@@ -1019,18 +1017,21 @@ class ScopeLookupResultImpl extends ScopeLookupResult {
 /// an importing scope needs their elements.
 class SharedExportIndex {
   final _byName = <String, _SharedExport>{};
-  final _extensions = <ExportEntry>[];
+  final _extensionEntries = <ExportEntry>[];
 
-  new(LibraryElementImpl library) {
+  new(List<ExportEntry> entries) {
     // Preserve export order if multiple entries have the same display name.
-    for (var entry in library.exportEntries.reversed) {
-      var id = entry.name.removeSuffixOrSelf('=');
-      _byName[id] = _SharedExport(entry, _byName[id]);
+    for (var entry in entries.reversed) {
+      var displayName = entry.name.removeSuffixOrSelf('=');
+      _byName[displayName] = _SharedExport(entry, _byName[displayName]);
       if (entry.reference.isExtension) {
-        _extensions.add(entry);
+        _extensionEntries.add(entry);
       }
     }
   }
+
+  /// The exported extensions in their original export order.
+  Iterable<ExportEntry> get extensionEntries => _extensionEntries.reversed;
 
   /// The entries for [displayName] in the order an importing scope visits them.
   @visibleForTesting
@@ -1165,5 +1166,11 @@ extension on LibraryFragmentImpl {
       return !library.featureSet.isEnabled(Feature.wildcard_variables);
     }
     return true;
+  }
+}
+
+extension on _ImportSource {
+  ElementImpl resolve(ExportEntry entry) {
+    return library.internal.elementFactory.elementOfReference3(entry.reference);
   }
 }

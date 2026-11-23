@@ -108,11 +108,39 @@ import 'a.dart' as hidden hide foo;
   }
 
   test_lazyReExport_hide() async {
-    await _checkLazyReExport('hide B, E', withExtension: true);
+    var (:library, :bUri) = await _linkImporter(
+      'hide B, E',
+      extension: 'extension E on int {}',
+    );
+    var factory = library.internal.elementFactory;
+    expect(library.getClass('C')!.supertype!.element.name, 'A');
+    expect(factory.uriListWithLibraryElements, isNot(contains(bUri)));
+
+    var prefix = library.firstFragment.prefixes.single;
+    expect(prefix.scope.lookup('B').getter, isNull);
+    expect(
+      library.firstFragment.scope.accessibleExtensions.map((e) => e.name),
+      isNot(contains('E')),
+    );
+    expect(factory.uriListWithLibraryElements, isNot(contains(bUri)));
   }
 
   test_lazyReExport_show() async {
-    await _checkLazyReExport('show A', withExtension: true);
+    var (:library, :bUri) = await _linkImporter(
+      'show A',
+      extension: 'extension E on int {}',
+    );
+    var factory = library.internal.elementFactory;
+    expect(library.getClass('C')!.supertype!.element.name, 'A');
+    expect(factory.uriListWithLibraryElements, isNot(contains(bUri)));
+
+    var prefix = library.firstFragment.prefixes.single;
+    expect(prefix.scope.lookup('B').getter, isNull);
+    expect(
+      library.firstFragment.scope.accessibleExtensions.map((e) => e.name),
+      isNot(contains('E')),
+    );
+    expect(factory.uriListWithLibraryElements, isNot(contains(bUri)));
   }
 
   test_lazyReExport_shownExtension() async {
@@ -130,7 +158,14 @@ int f() => 1.doubled;
   }
 
   test_lazyReExport_unfiltered() async {
-    await _checkLazyReExport('', withExtension: false);
+    var (:library, :bUri) = await _linkImporter('');
+    var factory = library.internal.elementFactory;
+    expect(library.getClass('C')!.supertype!.element.name, 'A');
+    expect(factory.uriListWithLibraryElements, isNot(contains(bUri)));
+
+    var prefix = library.firstFragment.prefixes.single;
+    expect(prefix.scope.lookup('B').getter?.library?.uri, bUri);
+    expect(factory.uriListWithLibraryElements, contains(bUri));
   }
 
   test_partPrefix_shadowedByUnprefixedImport() async {
@@ -154,7 +189,7 @@ import 'dart:math' as p;
     var middle = library.fragments[1];
     var child = library.fragments[2].prefixes.single;
     var tracking = middle.scope.importsTrackingInit();
-    var requirements = _RecordingRequirements();
+    var requirements = _PrefixLookupRecorder();
     var previous = globalResultRequirements;
     try {
       globalResultRequirements = requirements;
@@ -196,14 +231,14 @@ import 'dart:core' as q;
     }
   }
 
-  Future<void> _checkLazyReExport(
+  Future<({LibraryElementImpl library, Uri bUri})> _linkImporter(
     String combinators, {
-    required bool withExtension,
+    String extension = '',
   }) async {
     newFile('$testPackageLibPath/a.dart', 'class A {}');
     newFile('$testPackageLibPath/b.dart', '''
 class B {}
-${withExtension ? 'extension E on int {}' : ''}
+$extension
 ''');
     newFile('$testPackageLibPath/mid.dart', "export 'b.dart';");
     var barrel = newFile('$testPackageLibPath/barrel.dart', '''
@@ -218,26 +253,11 @@ import 'barrel.dart' as p $combinators;
 class C extends p.A {}
 ''');
     var library = await libraryElementForFile(testFile);
-    var factory = library.internal.elementFactory;
-    var bUri = Uri.parse('package:test/b.dart');
-    expect(library.getClass('C')!.supertype!.element.name, 'A');
-    expect(factory.uriListWithLibraryElements, isNot(contains(bUri)));
-    var prefix = library.firstFragment.prefixes.single;
-    if (combinators.isEmpty) {
-      expect(prefix.scope.lookup('B').getter?.library?.uri, bUri);
-      expect(factory.uriListWithLibraryElements, contains(bUri));
-    } else {
-      expect(prefix.scope.lookup('B').getter, isNull);
-      expect(
-        library.firstFragment.scope.accessibleExtensions.map((e) => e.name),
-        isNot(contains('E')),
-      );
-      expect(factory.uriListWithLibraryElements, isNot(contains(bUri)));
-    }
+    return (library: library, bUri: Uri.parse('package:test/b.dart'));
   }
 }
 
-class _RecordingRequirements extends RequirementsManifest {
+class _PrefixLookupRecorder extends RequirementsManifest {
   final prefixLookups = <String>[];
 
   @override
