@@ -511,7 +511,6 @@ class FileState {
 
   FileContent? _fileContent;
   LineInfo? _lineInfo;
-  Uint8List? _unlinkedSignature;
   String? _unlinkedKey;
   AnalysisDriverUnlinkedUnit? _driverUnlinkedUnit;
   Uint8List? _apiSignature;
@@ -679,8 +678,7 @@ class FileState {
       signature.addLanguageVersion(packageLanguageVersion);
       signature.addString(contentHash);
       signature.addBool(exists);
-      _unlinkedSignature = signature.toByteList();
-      var signatureHex = hex.encode(_unlinkedSignature!);
+      var signatureHex = hex.encode(signature.toByteList());
       // TODO(scheglov): Use the path as the key, and store the signature.
       _unlinkedKey = '$signatureHex.unlinked2';
     }
