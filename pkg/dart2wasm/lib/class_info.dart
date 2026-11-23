@@ -734,8 +734,7 @@ class ClassInfoCollector {
 
 class ClassIdNumbering {
   final Translator translator;
-  final Map<Class, List<Class>> _subclasses;
-  final Map<Class, List<Class>> _implementors;
+  final Map<Class, List<Range>> _concreteClassIdRanges;
   final Map<Class, List<Range>> _concreteSubclassIdRange;
   final Set<Class> _masqueraded;
 
@@ -746,8 +745,7 @@ class ClassIdNumbering {
 
   ClassIdNumbering._(
     this.translator,
-    this._subclasses,
-    this._implementors,
+    this._concreteClassIdRanges,
     this._concreteSubclassIdRange,
     this._masqueraded,
     this.dfsOrder,
@@ -756,54 +754,10 @@ class ClassIdNumbering {
     this.maxClassId,
   );
 
-  final Map<Class, Set<Class>> _transitiveImplementors = {};
-  Set<Class> _getTransitiveImplementors(Class klass) {
-    var transitiveImplementors = _transitiveImplementors[klass];
-    if (transitiveImplementors != null) return transitiveImplementors;
-
-    transitiveImplementors = {};
-
-    List<Class>? classes = _subclasses[klass];
-    if (classes != null) {
-      for (final cls in classes) {
-        transitiveImplementors.addAll(_getTransitiveImplementors(cls));
-      }
-    }
-    classes = _implementors[klass];
-    if (classes != null) {
-      for (final cls in classes) {
-        transitiveImplementors.add(cls);
-        transitiveImplementors.addAll(_getTransitiveImplementors(cls));
-      }
-    }
-
-    return _transitiveImplementors[klass] = transitiveImplementors;
-  }
-
-  /// Maps a class to a list of class id ranges that implement/extend the given
-  /// class directly or transitively.
-  final Map<Class, List<Range>> _concreteClassIdRanges = {};
-  List<Range> getConcreteClassIdRange(Class klass) {
-    var ranges = _concreteClassIdRanges[klass];
-    if (ranges != null) return ranges;
-
-    ranges = [];
-    final transitiveImplementors = _getTransitiveImplementors(klass);
-    final subclassRanges = _concreteSubclassIdRange[klass] ?? const [];
-    for (final range in subclassRanges) {
-      ranges.add(range);
-    }
-    for (final implementor in transitiveImplementors) {
-      final implementorRanges =
-          _concreteSubclassIdRange[implementor] ?? const [];
-      for (final range in implementorRanges) {
-        ranges.add(range);
-      }
-    }
-    ranges.normalize();
-
-    return _concreteClassIdRanges[klass] = ranges;
-  }
+  /// The concrete class IDs that extend or implement [klass], including itself
+  /// if it is concrete.
+  List<Range> getConcreteClassIdRange(Class klass) =>
+      _concreteClassIdRanges[klass] ?? const [];
 
   late final int firstNonMasqueradedInterfaceClassCid = (() {
     int lastMasqueradedClassId = 0;
@@ -995,8 +949,12 @@ class ClassIdNumbering {
 
     return ClassIdNumbering._(
       translator,
-      subclasses,
-      implementors,
+      computeConcreteClassIdRanges(
+        dfsOrder,
+        subclassRanges: concreteSubclassRanges,
+        subclasses: subclasses,
+        implementors: implementors,
+      ),
       concreteSubclassRanges,
       masqueraded,
       dfsOrder,
@@ -1008,6 +966,42 @@ class ClassIdNumbering {
 
   List<Range> getConcreteSubclassRanges(Class klass) =>
       _concreteSubclassIdRange[klass] ?? const [];
+}
+
+/// Computes concrete subtype IDs without expanding ranges into individual classes.
+///
+/// A direct subtype contributes its already normalized ranges whether it
+/// extends or implements the class. In a chain of interfaces with consecutive
+/// IDs, each class therefore passes just one range to its parent.
+Map<Class, List<Range>> computeConcreteClassIdRanges(
+  Iterable<Class> classes, {
+  required Map<Class, List<Range>> subclassRanges,
+  required Map<Class, List<Class>> subclasses,
+  required Map<Class, List<Class>> implementors,
+}) {
+  final result = <Class, List<Range>>{};
+
+  List<Range> rangesFor(Class cls) {
+    final cached = result[cls];
+    if (cached != null) return cached;
+
+    final bounds = subclassRanges[cls] ?? const <Range>[];
+    final ranges = <Range>[
+      ...bounds,
+      // A subclass can introduce implementors outside our own subclass ranges.
+      for (final child in subclasses[cls] ?? const <Class>[])
+        for (final range in rangesFor(child))
+          if (!bounds.any((bound) => bound.containsRange(range))) range,
+      for (final child in implementors[cls] ?? const <Class>[])
+        ...rangesFor(child),
+    ]..normalize();
+    return result[cls] = ranges;
+  }
+
+  for (final cls in classes) {
+    rangesFor(cls);
+  }
+  return result;
 }
 
 // A range of class ids, both ends inclusive.
