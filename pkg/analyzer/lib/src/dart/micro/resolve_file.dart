@@ -19,7 +19,8 @@ import 'package:analyzer/src/dart/analysis/analysis_options_map.dart';
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
 import 'package:analyzer/src/dart/analysis/cache.dart';
 import 'package:analyzer/src/dart/analysis/context_root.dart';
-import 'package:analyzer/src/dart/analysis/driver.dart' show ErrorEncoding;
+import 'package:analyzer/src/dart/analysis/driver.dart'
+    show AnalysisDriver, ErrorEncoding;
 import 'package:analyzer/src/dart/analysis/experiments.dart';
 import 'package:analyzer/src/dart/analysis/feature_set_provider.dart';
 import 'package:analyzer/src/dart/analysis/file_state.dart';
@@ -720,7 +721,7 @@ class FileResolver {
         sourceFactory,
         workspace,
         DeclaredVariables.fromMap({}),
-        Uint32List(0), // _saltForUnlinked
+        Uint32List.fromList([AnalysisDriver.DATA_VERSION]), // _saltForUnlinked
         Uint32List(0), // _saltForElements
         featureSetProvider,
         AnalysisOptionsMap.forSharedOptions(analysisOptions),

@@ -862,7 +862,7 @@ class FileState {
           performance: performance,
         );
       });
-      var definedNames = computeDefinedNames(unit);
+      var definedClassMemberNames = computeDefinedClassMemberNames(unit);
       var referencedNames = computeReferencedNames(
         unit,
         includeAnalyzerDiagnosticExpectations:
@@ -870,8 +870,7 @@ class FileState {
       );
       var subtypedNames = computeSubtypedNames(unit);
       var driverUnlinkedUnit = AnalysisDriverUnlinkedUnit(
-        definedTopLevelNames: definedNames.topLevelNames,
-        definedClassMemberNames: definedNames.classMemberNames,
+        definedClassMemberNames: definedClassMemberNames,
         referencedNames: referencedNames,
         subtypedNames: subtypedNames,
         unit: unlinkedUnit,

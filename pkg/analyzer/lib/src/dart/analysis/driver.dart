@@ -117,7 +117,7 @@ testFineAfterLibraryAnalyzerHook;
 // TODO(scheglov): Clean up the list of implicitly analyzed files.
 class AnalysisDriver {
   /// The version of data format, should be incremented on every format change.
-  static const int DATA_VERSION = 766;
+  static const int DATA_VERSION = 767;
 
   static const _backgroundSummaryBatchSize = 16;
   static const _editorIdleDelay = Duration(milliseconds: 100);
