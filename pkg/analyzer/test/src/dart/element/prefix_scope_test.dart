@@ -3,6 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analyzer/dart/element/element.dart';
+import 'package:analyzer/src/dart/element/element.dart';
 import 'package:analyzer/src/dart/element/scope.dart';
 import 'package:analyzer/src/fine/requirements.dart';
 import 'package:test/test.dart';
@@ -95,6 +96,7 @@ import 'a.dart' as hidden hide foo;
     expect(entries.map((e) => e.name), unorderedEquals(['foo', 'foo=']));
     for (var order in [entries, entries.reversed.toList()]) {
       imported.exportEntries = order;
+      expect(imported.sharedExportIndex.entriesForTesting('foo'), order);
       library.resetScope();
       var shown = prefixes.first.scope.lookup('foo');
       expect(shown.getter, same(imported.getters.single));
@@ -152,18 +154,17 @@ import 'dart:math' as p;
     var middle = library.fragments[1];
     var child = library.fragments[2].prefixes.single;
     var tracking = middle.scope.importsTrackingInit();
-    var requirements = RequirementsManifest();
+    var requirements = _RecordingRequirements();
     var previous = globalResultRequirements;
     try {
       globalResultRequirements = requirements;
       // Constructing the child's scope probes the middle file for 'p'.
       var scope = child.scope;
-      globalResultRequirements = previous;
-      requirements.stopRecording();
-      expect(requirements.notExportedNames, isEmpty);
+      expect(requirements.prefixLookups, isEmpty);
       var import = middle.libraryImports.firstWhere((i) => !i.isSynthetic);
       expect(tracking.elementsOf(import), isEmpty);
       expect(scope.parent, isNull);
+      expect(requirements.prefixLookups, contains('p'));
       expect(scope.lookup('A').getter, isNull);
 
       // An actual lookup of the same name is a use of the middle import.
@@ -233,5 +234,18 @@ class C extends p.A {}
       );
       expect(factory.uriListWithLibraryElements, isNot(contains(bUri)));
     }
+  }
+}
+
+class _RecordingRequirements extends RequirementsManifest {
+  final prefixLookups = <String>[];
+
+  @override
+  void record_importPrefixScope_lookup({
+    required PrefixScopeRequirementState state,
+    required List<LibraryElementImpl> importedLibraries,
+    required String id,
+  }) {
+    prefixLookups.add(id);
   }
 }

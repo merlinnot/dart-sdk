@@ -12,6 +12,7 @@ import 'package:analyzer/src/summary2/combinator.dart';
 import 'package:analyzer/src/summary2/export.dart';
 import 'package:analyzer/src/utilities/extensions/collection.dart';
 import 'package:analyzer/src/utilities/extensions/string.dart';
+import 'package:meta/meta.dart';
 
 typedef _ImportSource = ({
   LibraryImportImpl directive,
@@ -1028,6 +1029,14 @@ class SharedExportIndex {
       if (entry.reference.isExtension) {
         _extensions.add(entry);
       }
+    }
+  }
+
+  /// The entries for [displayName] in the order an importing scope visits them.
+  @visibleForTesting
+  Iterable<ExportEntry> entriesForTesting(String displayName) sync* {
+    for (var node = _byName[displayName]; node != null; node = node.next) {
+      yield node.entry;
     }
   }
 }
