@@ -6,12 +6,15 @@ import 'package:analyzer/dart/analysis/context_root.dart';
 import 'package:analyzer/dart/analysis/features.dart';
 import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/file_system/file_system.dart';
+import 'package:analyzer/file_system/overlay_file_system.dart';
 import 'package:analyzer/src/analysis_options/analysis_options.dart';
+import 'package:analyzer/src/analysis_options/analysis_options_parser.dart';
 import 'package:analyzer/src/dart/analysis/analysis_context_collection.dart';
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
 import 'package:analyzer/src/dart/analysis/driver_based_analysis_context.dart';
 import 'package:analyzer/src/dart/analysis/experiments.dart';
 import 'package:analyzer/src/dart/analysis/file_state.dart';
+import 'package:analyzer/src/file_system/timing_resource_provider.dart';
 import 'package:analyzer/src/generated/sdk.dart';
 import 'package:analyzer/src/test_utilities/mock_sdk.dart';
 import 'package:analyzer/src/util/file_paths.dart' as file_paths;
@@ -108,6 +111,29 @@ linter:
       analysisOptions.lintRules.map((e) => e.name),
       unorderedEquals(['empty_statements', 'unnecessary_parenthesis']),
     );
+  }
+
+  test_new_analysisOptions_inputs() {
+    var root = newFolder('/home/test');
+    var options = newAnalysisOptionsYamlFile(root.path, 'include: shared.yaml');
+    var shared = newFile('${root.path}/shared.yaml', 'include: missing.yaml');
+    var missing = getFile('${root.path}/missing.yaml');
+    var provider = _IncludeReadCounter(resourceProvider, shared.path);
+    var session = AnalysisOptionsParseSession();
+    var collection = AnalysisContextCollectionImpl(
+      analysisOptionsParseSession: session,
+      includedPaths: [root.path],
+      resourceProvider: provider,
+      sdkPath: sdkRoot.path,
+    );
+    addTearDown(collection.dispose);
+
+    expect(
+      session.attemptedFiles.map((file) => file.path),
+      unorderedEquals([options.path, shared.path, missing.path]),
+    );
+    // Both root discovery and driver creation parse this include.
+    expect(provider.readCount, 1);
   }
 
   test_new_analysisOptions_lintRules() {
@@ -6745,4 +6771,18 @@ class _AnalysisContextCollectionPrinterConfiguration {
   bool withPackageLanguageVersion = false;
   bool withExcludedGlobs = false;
   bool withSdk = false;
+}
+
+/// Measures reads of one include independently of other context setup I/O.
+class _IncludeReadCounter(super.baseProvider, final String includePath)
+    extends OverlayResourceProvider {
+  late final _timed = TimingResourceProvider(baseProvider);
+
+  int get readCount =>
+      _timed.timings[ResourceProviderOperation.fileReadAsStringSync]?.count ??
+      0;
+
+  @override
+  File getFile(String path) =>
+      path == includePath ? _timed.getFile(path) : super.getFile(path);
 }
